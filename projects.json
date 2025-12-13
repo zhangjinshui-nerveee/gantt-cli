@@ -3,16 +3,16 @@
     {
       "project_name": "Figure-8 Core",
       "project_start_date": "2025-11-07",
-      "week_to_show": 1,
+      "week_to_show": 4,
       "tasks": [
         {
           "id": 1,
           "name": "Build magcore in CAD",
           "assigned_to": "Emmy,Hunter",
-          "duration": 21,
+          "duration": 7,
           "progress": 0,
           "dependencies": [],
-          "manual_start_date": "2025-11-07",
+          "manual_start_date": "2025-12-16",
           "details": null
         },
         {
@@ -153,7 +153,7 @@
     {
       "project_name": "DiSeP-STATCOM",
       "project_start_date": "2025-11-07",
-      "week_to_show": 0,
+      "week_to_show": 4,
       "tasks": [
         {
           "id": 1,
@@ -169,7 +169,7 @@
           "id": 2,
           "name": "pid param refine",
           "assigned_to": "zane",
-          "duration": 13,
+          "duration": 40,
           "progress": 0,
           "dependencies": [
             1
@@ -193,10 +193,10 @@
           "id": 4,
           "name": "circuit assembly (thermal)",
           "assigned_to": "Chris",
-          "duration": 10,
+          "duration": 14,
           "progress": 0,
           "dependencies": [],
-          "manual_start_date": "2025-11-16",
+          "manual_start_date": "2025-12-16",
           "details": null
         },
         {
@@ -225,7 +225,7 @@
           "id": 7,
           "name": "prototyping dc voltage sensor",
           "assigned_to": "jinshui",
-          "duration": 7,
+          "duration": 14,
           "progress": 0,
           "dependencies": [
             6
@@ -237,7 +237,7 @@
           "id": 8,
           "name": "current sampler test",
           "assigned_to": "zane",
-          "duration": 7,
+          "duration": 14,
           "progress": 0,
           "dependencies": [
             6
@@ -250,7 +250,7 @@
           "name": "inverter (as grid) test",
           "assigned_to": "jinshui",
           "duration": 21,
-          "progress": 0,
+          "progress": 100,
           "dependencies": [],
           "manual_start_date": "2025-11-10",
           "details": null
@@ -258,7 +258,7 @@
         {
           "id": 10,
           "name": "system testing",
-          "assigned_to": "Unassigned",
+          "assigned_to": "jinshui",
           "duration": 20,
           "progress": 0,
           "dependencies": [
@@ -286,14 +286,14 @@
     {
       "project_name": "startup",
       "project_start_date": "2025-11-17",
-      "week_to_show": 0,
+      "week_to_show": 2,
       "tasks": [
         {
           "id": 1,
           "name": "joulesaccelerator appl.",
           "assigned_to": "jinshui",
           "duration": 8,
-          "progress": 0,
+          "progress": 100,
           "dependencies": [],
           "manual_start_date": "2025-11-17",
           "details": null
@@ -302,7 +302,7 @@
           "id": 2,
           "name": "update pitching deck",
           "assigned_to": "alex",
-          "duration": 20,
+          "duration": 30,
           "progress": 70,
           "dependencies": [],
           "manual_start_date": null,
@@ -318,6 +318,16 @@
             2
           ],
           "manual_start_date": null,
+          "details": null
+        },
+        {
+          "id": 4,
+          "name": "entreprenur workshop @duke",
+          "assigned_to": "jinshui",
+          "duration": 2,
+          "progress": 100,
+          "dependencies": [],
+          "manual_start_date": "2025-12-03",
           "details": null
         }
       ]
