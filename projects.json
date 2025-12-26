@@ -316,17 +316,6 @@
       "tasks": [
         {
           "id": 1,
-          "name": "joulesaccelerator appl.",
-          "assigned_to": "jinshui",
-          "duration": 8,
-          "progress": 100,
-          "dependencies": [],
-          "manual_start_date": "2025-11-17",
-          "details": "Top 25 finalist, but not good enough to be in the cohort.",
-          "parent_id": null
-        },
-        {
-          "id": 2,
           "name": "update pitching deck",
           "assigned_to": "alex",
           "duration": 21,
@@ -337,7 +326,7 @@
           "parent_id": null
         },
         {
-          "id": 3,
+          "id": 2,
           "name": "market research",
           "assigned_to": "jinshui",
           "duration": 20,
@@ -345,20 +334,31 @@
           "dependencies": [],
           "manual_start_date": "2025-12-26",
           "details": null,
-          "parent_id": 2
+          "parent_id": 1
         },
         {
-          "id": 4,
+          "id": 3,
           "name": "alternative research",
           "assigned_to": "Unassigned",
           "duration": 1,
           "progress": 0,
           "dependencies": [
-            3
+            2
           ],
           "manual_start_date": null,
           "details": null,
-          "parent_id": 2
+          "parent_id": 1
+        },
+        {
+          "id": 4,
+          "name": "burning rate ",
+          "assigned_to": "Unassigned",
+          "duration": 20,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2025-12-26",
+          "details": null,
+          "parent_id": 1
         },
         {
           "id": 5,
@@ -369,6 +369,17 @@
           "dependencies": [],
           "manual_start_date": "2025-12-03",
           "details": "Lean canvas. Networking.",
+          "parent_id": null
+        },
+        {
+          "id": 6,
+          "name": "joulesaccelerator appl.",
+          "assigned_to": "jinshui",
+          "duration": 8,
+          "progress": 100,
+          "dependencies": [],
+          "manual_start_date": "2025-11-17",
+          "details": "Top 25 finalist, but not good enough to be in the cohort.",
           "parent_id": null
         }
       ]

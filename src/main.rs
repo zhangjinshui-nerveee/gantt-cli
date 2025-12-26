@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{block::*, *},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, stdout};
 use std::panic;
@@ -263,37 +263,48 @@ impl App {
     }
 
     fn move_task_up(&mut self) {
-        if let FocusArea::Tasks = self.focus_area {
-            if let Some(selected_index) = self.table_state.selected() {
-                if selected_index > 0 {
-                    self.save_state_for_undo();
-                    let new_selected_index = selected_index - 1;
-                    { 
-                        let current_project = self.get_current_project_mut();
-                        current_project.tasks.swap(selected_index, new_selected_index);
-                    } 
-                    self.table_state.select(Some(new_selected_index));
-                }
-                self.remap_ids_and_dependencies();
-            }
+        if let Some(selected_index) = self.table_state.selected() {
+            if selected_index == 0 { return; }
+
+            let my_family_range = self.get_contiguous_family_range(selected_index);
+            
+            if my_family_range.start == 0 { return; }
+            
+            let target_index_before = my_family_range.start - 1;
+            let target_family_range = self.get_contiguous_family_range(target_index_before);
+
+            self.save_state_for_undo();
+            
+            let tasks_to_move: Vec<_> = self.get_current_project_mut().tasks.drain(my_family_range.clone()).collect();
+            
+            let new_insert_index = target_family_range.start;
+            self.get_current_project_mut().tasks.splice(new_insert_index..new_insert_index, tasks_to_move);
+            
+            self.table_state.select(Some(new_insert_index));
+            self.remap_ids_and_dependencies();
         }
     }
 
     fn move_task_down(&mut self) {
-        if let FocusArea::Tasks = self.focus_area {
-            if let Some(selected_index) = self.table_state.selected() {
-                let current_project_len = self.get_current_project().tasks.len();
-                if selected_index < current_project_len - 1 {
-                    self.save_state_for_undo();
-                    let new_selected_index = selected_index + 1;
-                    { 
-                        let current_project = self.get_current_project_mut();
-                        current_project.tasks.swap(selected_index, new_selected_index);
-                    } 
-                    self.table_state.select(Some(new_selected_index));
-                    self.remap_ids_and_dependencies();
-                }
-            }
+        if let Some(selected_index) = self.table_state.selected() {
+            let tasks_len = self.get_current_project().tasks.len();
+            let my_family_range = self.get_contiguous_family_range(selected_index);
+
+            if my_family_range.end >= tasks_len { return; }
+
+            let target_index = my_family_range.end;
+            let target_family_range = self.get_contiguous_family_range(target_index);
+
+            self.save_state_for_undo();
+
+            let tasks_to_move: Vec<_> = self.get_current_project_mut().tasks.drain(my_family_range.clone()).collect();
+            
+            let new_insert_index = target_family_range.end - my_family_range.len();
+
+            self.get_current_project_mut().tasks.splice(new_insert_index..new_insert_index, tasks_to_move);
+            
+            self.table_state.select(Some(new_insert_index));
+            self.remap_ids_and_dependencies();
         }
     }
 
@@ -307,16 +318,18 @@ impl App {
 
         let mut new_tasks = Vec::new();
         for (i, old_task) in current_project.tasks.iter().enumerate() {
-            let mut new_task = old_task.clone();
-            new_task.id = (i + 1) as u32;
+                    let mut new_task = old_task.clone();
+                    new_task.id = (i + 1) as u32;
+                    
+                    new_task.parent_id = old_task.parent_id
+                        .and_then(|old_parent_id| id_map.get(&old_parent_id).cloned());
             
-            new_task.dependencies = old_task.dependencies
-                .iter()
-                .filter_map(|old_dep_id| id_map.get(old_dep_id).cloned())
-                .collect();
-                
-            new_tasks.push(new_task);
-        }
+                    new_task.dependencies = old_task.dependencies
+                        .iter()
+                        .filter_map(|old_dep_id| id_map.get(old_dep_id).cloned())
+                        .collect();
+                        
+                    new_tasks.push(new_task);        }
 
         current_project.tasks = new_tasks;
         self.recalculate_schedule();
@@ -656,6 +669,26 @@ impl App {
             }
         }
         task_display_ids
+    }
+
+    fn get_contiguous_family_range(&self, start_index: usize) -> std::ops::Range<usize> {
+        let tasks = &self.get_current_project().tasks;
+        if start_index >= tasks.len() {
+            return start_index..start_index;
+        }
+
+        let start_level = self.get_task_level(&tasks[start_index]);
+        let mut end_index = start_index + 1;
+
+        while let Some(next_task) = tasks.get(end_index) {
+            let next_level = self.get_task_level(next_task);
+            if next_level > start_level {
+                end_index += 1;
+            } else {
+                break;
+            }
+        }
+        start_index..end_index
     }
 }
 
@@ -1509,9 +1542,14 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Paragraph::new(Line::from(day_spans)).scroll((0, 0)), header_layout[1]);
     frame.render_widget(Paragraph::new(Line::from(weekday_spans)).scroll((0, 0)), header_layout[2]);
 
+    let parent_ids: HashSet<u32> = current_project.tasks.iter()
+        .filter_map(|t| t.parent_id)
+        .collect();
+
     let mut lines = vec![Line::from(""); 1]; // 1 for header alignment
 
     for (i, task) in current_project.tasks.iter().enumerate() {
+        let is_parent = parent_ids.contains(&task.id);
         let row_style = if app.focus_area == FocusArea::Tasks && app.table_state.selected() == Some(i) { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
         let mut bar_spans = vec![];
         if let (Some(start), Some(end)) = (task.start_date, task.end_date) {
@@ -1529,11 +1567,21 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                 let is_task_day = current_date >= start && current_date <= end;
                 
                 let content = if is_task_day {
-                    let is_progress_day = current_date <= progress_end;
-                    if is_today {
-                        if is_progress_day { "|░░" } else { "|██" } // Today marker + 2 progress filled/empty
+                    if is_parent {
+                        if current_date == start {
+                            "[=="
+                        } else if current_date == end {
+                            "==]"
+                        } else {
+                            "==="
+                        }
                     } else {
-                        if is_progress_day { "░░░" } else { "███" } // 3 progress filled/empty
+                        let is_progress_day = current_date <= progress_end;
+                        if is_today {
+                            if is_progress_day { "|░░" } else { "|██" } // Today marker + 2 progress filled/empty
+                        } else {
+                            if is_progress_day { "░░░" } else { "███" } // 3 progress filled/empty
+                        }
                     }
                 } else {
                     if is_today { "|  " } else { "   " } // Today marker + 2 spaces / 3 spaces
