@@ -502,6 +502,7 @@ impl App {
             if self.todo_list_state.selected().is_none() && !self.all_projects.todo_list.is_empty() {
                 self.todo_list_state.select(Some(0));
             }
+            self.sync_project_with_todo_selection();
         } else {
             self.focus_area = FocusArea::Tasks;
         }
@@ -547,6 +548,38 @@ impl App {
             if idx < self.all_projects.todo_list.len() - 1 {
                 self.all_projects.todo_list.swap(idx, idx + 1);
                 self.todo_list_state.select(Some(idx + 1));
+            }
+        }
+    }
+
+    fn sync_project_with_todo_selection(&mut self) {
+        let task_name = if let Some(idx) = self.todo_list_state.selected() {
+            self.all_projects.todo_list.get(idx).cloned()
+        } else {
+            None
+        };
+
+        if let Some(name) = task_name {
+            // Check current project first
+            if let Some(task_idx) = self.get_current_project().tasks.iter().position(|t| t.name == name) {
+                self.table_state.select(Some(task_idx));
+                return;
+            }
+
+            // Search other projects
+            let mut target_project_and_task = None;
+            for (i, project) in self.all_projects.projects.iter().enumerate() {
+                if let Some(task_idx) = project.tasks.iter().position(|t| t.name == name) {
+                    target_project_and_task = Some((i, task_idx, project.project_name.clone()));
+                    break;
+                }
+            }
+
+            if let Some((proj_idx, task_idx, proj_name)) = target_project_and_task {
+                self.current_project_index = proj_idx;
+                self.recalculate_schedule();
+                self.table_state.select(Some(task_idx));
+                self.status_message = format!("Jumped to project '{}' for task '{}'.", proj_name, name);
             }
         }
     }
@@ -1021,6 +1054,7 @@ fn navigate_up(app: &mut App) {
             if let Some(selected) = app.todo_list_state.selected() {
                 if selected > 0 {
                     app.todo_list_state.select(Some(selected - 1));
+                    app.sync_project_with_todo_selection();
                 }
             }
         }
@@ -1049,6 +1083,7 @@ fn navigate_down(app: &mut App) {
             if let Some(selected) = app.todo_list_state.selected() {
                 if selected < app.all_projects.todo_list.len() - 1 {
                     app.todo_list_state.select(Some(selected + 1));
+                    app.sync_project_with_todo_selection();
                 }
             }
         }
@@ -1506,6 +1541,13 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
 
     let rows = current_project.tasks.iter().enumerate().map(|(i, task)| {
         let is_selected_row = app.table_state.selected() == Some(i);
+        
+        let is_selected_in_todo = if app.focus_area == FocusArea::TodoList {
+            if let Some(todo_idx) = app.todo_list_state.selected() {
+                app.all_projects.todo_list.get(todo_idx) == Some(&task.name)
+            } else { false }
+        } else { false };
+
         let level = app.get_task_level(task);
         let indent = "  ".repeat(level as usize);
 
@@ -1536,7 +1578,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
             false
         };
 
-        let row_style = if is_overdue {
+        let mut row_style = if is_overdue {
             Style::default().fg(Color::Red)
         } else { match app.highlight_mode {
             HighlightMode::Today => {
@@ -1554,6 +1596,10 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
                 }
             }
         }};
+
+        if is_selected_in_todo {
+            row_style = row_style.bg(Color::Rgb(60, 60, 0)); // Dark yellow background for todo selection
+        }
 
         let deps_str = task.dependencies.iter()
             .map(|dep_id| display_ids.get(dep_id).cloned().unwrap_or_else(|| "?".to_string()))

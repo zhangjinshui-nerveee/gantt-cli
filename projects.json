@@ -385,5 +385,9 @@
       ]
     }
   ],
-  "active_project_index": 2
+  "active_project_index": 1,
+  "todo_list": [
+    "burning rate ",
+    "COMSOL setup"
+  ]
 }
