@@ -1463,7 +1463,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     let current_project = app.get_current_project();
     let min_date = current_project.project_start_date + Duration::weeks(current_project.week_to_show as i64);
     
-    const DAY_WIDTH: u16 = 4;
+    const DAY_WIDTH: u16 = 3;
     let date_range_days = (app.gantt_area_width / DAY_WIDTH) as i64;
 
     let mut month_spans = vec![];
@@ -1493,12 +1493,12 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
             Weekday::Sun => "S",
         };
 
-        day_spans.push(Span::styled(format!(" {:<2} ", current_date.day()), day_style));
-        weekday_spans.push(Span::styled(format!(" {}  ", weekday_char), day_style));
+        day_spans.push(Span::styled(format!("{:>2} ", current_date.day()), day_style));
+        weekday_spans.push(Span::styled(format!("{:>2} ", weekday_char), day_style));
 
         if current_date.month() != last_month {
             last_month = current_date.month();
-            month_spans.push(Span::styled(format!("|{:<width$}", current_date.format("%b"), width = DAY_WIDTH as usize - 1), Style::default()));
+            month_spans.push(Span::styled(format!("{:<3}", current_date.format("%b")), Style::default()));
         } else {
             month_spans.push(Span::raw(" ".repeat(DAY_WIDTH as usize)));
         }
@@ -1531,12 +1531,12 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                 let content = if is_task_day {
                     let is_progress_day = current_date <= progress_end;
                     if is_today {
-                        if is_progress_day { "|░░|" } else { "|██|" }
+                        if is_progress_day { "|░░" } else { "|██" } // Today marker + 2 progress filled/empty
                     } else {
-                        if is_progress_day { "░░░░" } else { "████" }
+                        if is_progress_day { "░░░" } else { "███" } // 3 progress filled/empty
                     }
                 } else {
-                    if is_today { "|  |" } else { "    " }
+                    if is_today { "|  " } else { "   " } // Today marker + 2 spaces / 3 spaces
                 };
 
                 let mut style = if is_today { row_style.fg(Color::Cyan) } else { row_style };
