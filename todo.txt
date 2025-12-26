@@ -1,2 +1,6 @@
-- make it more compact.
-- don't show the task progress bar if it has sub tasks.
+# Todo List Panel
+- toggle: capital T to open and close
+- all projects share one todo list
+- interactive: navigation and moving up/down
+- how to add: on selected task in the project panel, press + to add to the todo list
+- how to remove: on selected task in the todo list panel, press - to remove from the todo list
