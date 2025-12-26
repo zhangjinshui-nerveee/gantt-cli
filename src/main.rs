@@ -496,8 +496,12 @@ impl App {
     fn add_selected_task_to_todo(&mut self) {
         if let Some(idx) = self.table_state.selected() {
             let task_name = self.get_current_project().tasks[idx].name.clone();
-            self.all_projects.todo_list.push(task_name.clone());
-            self.status_message = format!("Task '{}' added to todo list.", task_name);
+            if self.all_projects.todo_list.contains(&task_name) {
+                self.status_message = format!("Task '{}' is already in the todo list.", task_name);
+            } else {
+                self.all_projects.todo_list.push(task_name.clone());
+                self.status_message = format!("Task '{}' added to todo list.", task_name);
+            }
         }
     }
 
