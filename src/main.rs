@@ -28,6 +28,7 @@ struct Task {
     dependencies: Vec<u32>,
     manual_start_date: Option<NaiveDate>,
     details: Option<String>,
+    parent_id: Option<u32>,
     #[serde(skip)]
     start_date: Option<NaiveDate>,
     #[serde(skip)]
@@ -165,8 +166,8 @@ impl App {
             week_to_show: 0,
             tasks: vec![],
         };
-        default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, details: None, start_date: None, end_date: None });
-        default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, details: None, start_date: None, end_date: None });
+        default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, details: None, parent_id: None, start_date: None, end_date: None });
+        default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, details: None, parent_id: None, start_date: None, end_date: None });
         
         self.all_projects.projects.push(default_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
@@ -361,6 +362,42 @@ impl App {
                 task.end_date = None;
             }
         }
+
+        // --- Auto-adjust parent tasks ---
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let tasks_clone = current_project.tasks.clone();
+            let parent_ids: Vec<_> = tasks_clone.iter().filter_map(|t| t.parent_id).collect();
+
+            for parent_task in &mut current_project.tasks {
+                if parent_ids.contains(&parent_task.id) { // Only process tasks that are actual parents
+                    let children: Vec<_> = tasks_clone.iter()
+                        .filter(|t| t.parent_id == Some(parent_task.id))
+                        .collect();
+                    
+                    let min_start = children.iter().filter_map(|t| t.start_date).min();
+                    let max_end = children.iter().filter_map(|t| t.end_date).max();
+
+                    let old_start = parent_task.start_date;
+                    let old_end = parent_task.end_date;
+
+                    if let Some(start) = min_start {
+                        parent_task.start_date = Some(start);
+                    }
+                    if let Some(end) = max_end {
+                        parent_task.end_date = Some(end);
+                        if let Some(start) = parent_task.start_date {
+                            parent_task.duration = (end - start).num_days() + 1;
+                        }
+                    }
+
+                    if old_start != parent_task.start_date || old_end != parent_task.end_date {
+                        changed = true;
+                    }
+                }
+            }
+        }
     }
 
     fn save_all_projects(&mut self) -> io::Result<()> {
@@ -442,6 +479,180 @@ impl App {
             self.status_message = "No other projects to switch to.".to_string();
         }
     }
+
+    fn get_task_level(&self, task: &Task) -> u32 {
+        let mut level = 0;
+        let mut current_parent_id = task.parent_id;
+        let tasks = &self.get_current_project().tasks;
+
+        while let Some(parent_id) = current_parent_id {
+            level += 1;
+            if let Some(parent_task) = tasks.iter().find(|t| t.id == parent_id) {
+                current_parent_id = parent_task.parent_id;
+            } else {
+                break; // Parent task not found, break the loop
+            }
+        }
+        level
+    }
+
+    fn indent_task(&mut self) {
+        if let Some(selected_index) = self.table_state.selected() {
+            if selected_index > 0 {
+                let tasks = &self.get_current_project().tasks;
+                let task_id = tasks[selected_index].id;
+                let new_parent_id = tasks[selected_index - 1].id;
+
+                // Prevent making a task its own parent
+                if task_id == new_parent_id {
+                    return;
+                }
+
+                // Prevent creating circular dependencies (simplified check)
+                let mut current_parent_id = Some(new_parent_id);
+                while let Some(parent_id) = current_parent_id {
+                    if parent_id == task_id {
+                        return; // Circular dependency detected
+                    }
+                    let parent_task = tasks.iter().find(|t| t.id == parent_id);
+                    if let Some(parent) = parent_task {
+                        current_parent_id = parent.parent_id;
+                    } else {
+                        break;
+                    }
+                }
+                
+                self.save_state_for_undo();
+                let tasks_mut = &mut self.get_current_project_mut().tasks;
+                tasks_mut[selected_index].parent_id = Some(new_parent_id);
+                self.recalculate_schedule();
+            }
+        }
+    }
+
+    fn unindent_task(&mut self) {
+        if let Some(selected_index) = self.table_state.selected() {
+            // Get immutable data first
+            let current_project = self.get_current_project();
+            if selected_index >= current_project.tasks.len() {
+                return; // Ensure selected_index is valid
+            }
+            let selected_task = &current_project.tasks[selected_index];
+
+            if let Some(parent_id) = selected_task.parent_id {
+                let parent_task_parent_id = current_project.tasks
+                    .iter()
+                    .find(|t| t.id == parent_id)
+                    .and_then(|t| t.parent_id);
+                
+                // Now perform mutable operations
+                self.save_state_for_undo();
+                let tasks_mut = &mut self.get_current_project_mut().tasks;
+                tasks_mut[selected_index].parent_id = parent_task_parent_id;
+                self.recalculate_schedule();
+            }
+        }
+    }
+
+    fn add_new_top_level_task(&mut self) {
+        self.save_state_for_undo();
+        let new_task = Task {
+            id: 0, // Will be remapped
+            name: "New Task".into(),
+            assigned_to: "Unassigned".into(),
+            duration: 1,
+            progress: 0,
+            dependencies: vec![],
+            manual_start_date: None,
+            details: None,
+            parent_id: None, // Top-level
+            start_date: None,
+            end_date: None,
+        };
+
+        let current_project = self.get_current_project_mut();
+        current_project.tasks.push(new_task); // Add to the end of the list
+        let new_task_index = current_project.tasks.len() - 1;
+
+        self.remap_ids_and_dependencies();
+        self.table_state.select(Some(new_task_index));
+        self.focus_area = FocusArea::Tasks;
+        self.selected_task_field = TaskField::Name;
+        self.input_mode = InputMode::Editing;
+        self.status_message = "Added new top-level task.".to_string();
+        // load_buffer_for_editing(self); // Handled by handle_normal_mode context
+    }
+
+    fn add_new_sibling_task(&mut self) {
+        self.save_state_for_undo();
+        
+        let (parent_id_for_new_task, insert_index, parent_start_date) = if let Some(selected_index) = self.table_state.selected() {
+            let selected_task = &self.get_current_project().tasks[selected_index];
+            let parent_start = if let Some(p_id) = selected_task.parent_id {
+                self.get_current_project().tasks.iter().find(|t| t.id == p_id).and_then(|t| t.start_date)
+            } else {
+                None // No parent, so no default start date from parent
+            };
+            (selected_task.parent_id, selected_index + 1, parent_start)
+        } else {
+            // If nothing is selected, add a top-level task at the end
+            (None, self.get_current_project().tasks.len(), None)
+        };
+
+        let new_task = Task {
+            id: 0, // Will be remapped
+            name: "New Task".into(),
+            assigned_to: "Unassigned".into(),
+            duration: 1,
+            progress: 0,
+            dependencies: vec![],
+            manual_start_date: parent_start_date,
+            details: None,
+            parent_id: parent_id_for_new_task,
+            start_date: None,
+            end_date: None,
+        };
+
+        let current_project = self.get_current_project_mut();
+        current_project.tasks.insert(insert_index, new_task);
+        
+        self.remap_ids_and_dependencies();
+        self.table_state.select(Some(insert_index));
+        self.focus_area = FocusArea::Tasks;
+        self.selected_task_field = TaskField::Name;
+        self.input_mode = InputMode::Editing;
+        self.status_message = "Added new sibling task.".to_string();
+    }
+
+    fn generate_task_display_ids(&self) -> HashMap<u32, String> {
+        let tasks = &self.get_current_project().tasks;
+        let mut task_display_ids: HashMap<u32, String> = HashMap::new();
+
+        for (i, task) in tasks.iter().enumerate() {
+            if let Some(parent_id) = task.parent_id {
+                if let Some(parent_display_id) = task_display_ids.get(&parent_id) {
+                    // Find how many siblings with a smaller index this task has.
+                    let siblings_before = tasks.iter().take(i)
+                        .filter(|t| t.parent_id == Some(parent_id))
+                        .count();
+                    
+                    let letter = (('a' as u8) + siblings_before as u8) as char;
+                    let display_id = format!("{}.{}", parent_display_id, letter);
+                    task_display_ids.insert(task.id, display_id);
+                } else {
+                    // Parent appears after child in the list or is an orphan
+                    task_display_ids.insert(task.id, "?".to_string());
+                }
+            } else {
+                // Top-level task.
+                let top_level_before = tasks.iter().take(i)
+                    .filter(|t| t.parent_id.is_none())
+                    .count();
+                task_display_ids.insert(task.id, (top_level_before + 1).to_string());
+            }
+        }
+        task_display_ids
+    }
 }
 
 // --- MAIN ---
@@ -497,12 +708,40 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('k') | KeyCode::Up => navigate_up(app),
         KeyCode::Char('h') | KeyCode::Left => select_previous_field(app),
         KeyCode::Char('l') | KeyCode::Right => select_next_field(app),
-        KeyCode::Char('a') | KeyCode::Char('o') => {
-            let new_task_index = app.add_task(Task { id: 0, name: "New Task".into(), assigned_to: "Unassigned".into(), duration: 1, progress: 0, dependencies: vec![], manual_start_date: None, details: None, start_date: None, end_date: None });
-            app.table_state.select(Some(new_task_index));
-            app.focus_area = FocusArea::Tasks;
-            app.selected_task_field = TaskField::Name;
-            app.input_mode = InputMode::Editing;
+        KeyCode::Char('a') => {
+            app.add_new_sibling_task();
+            load_buffer_for_editing(app);
+        },
+        KeyCode::Tab => app.indent_task(),
+        KeyCode::BackTab => app.unindent_task(),
+        KeyCode::Char('s') => {
+            if let Some(selected_index) = app.table_state.selected() {
+                let parent_task = &app.get_current_project().tasks[selected_index];
+                let parent_id = parent_task.id;
+                let parent_start_date = parent_task.start_date; // Get parent's start date
+
+                let new_task_index = app.add_task(Task { 
+                    id: 0, 
+                    name: "New Sub-task".into(), 
+                    assigned_to: "Unassigned".into(), 
+                    duration: 1, 
+                    progress: 0, 
+                    dependencies: vec![], 
+                    manual_start_date: parent_start_date, 
+                    details: None, 
+                    parent_id: Some(parent_id), 
+                    start_date: None, 
+                    end_date: None 
+                });
+                app.table_state.select(Some(new_task_index));
+                app.focus_area = FocusArea::Tasks;
+                app.selected_task_field = TaskField::Name;
+                app.input_mode = InputMode::Editing;
+                load_buffer_for_editing(app);
+            }
+        },
+        KeyCode::Char('A') => {
+            app.add_new_top_level_task();
             load_buffer_for_editing(app);
         }
         KeyCode::Char('D') => app.delete_selected_task(),
@@ -720,7 +959,13 @@ fn load_buffer_for_editing(app: &mut App) {
                     TaskField::AssignedTo => task.assigned_to.clone(),
                     TaskField::Duration => task.duration.to_string(),
                     TaskField::Progress => task.progress.to_string(),
-                    TaskField::Dependencies => task.dependencies.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", "),
+                    TaskField::Dependencies => {
+                        let display_ids = app.generate_task_display_ids();
+                        task.dependencies.iter()
+                            .map(|dep_id| display_ids.get(dep_id).cloned().unwrap_or_else(|| "?".to_string()))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    },
                     TaskField::StartDate => task.manual_start_date.map_or("".to_string(), |d| d.format("%m/%d/%Y").to_string()),
                 };
             }
@@ -734,75 +979,99 @@ fn save_buffer_to_task(app: &mut App) {
     let input_buffer_owned = app.input_buffer.clone(); // Clone input_buffer
     let selected_table_index = app.table_state.selected(); // Get selected_index before mutable borrow
 
-    let current_project = app.get_current_project_mut();
     match focus_area {
-        FocusArea::Project(ProjectField::Name) => current_project.project_name = input_buffer_owned.clone(),
-        FocusArea::Project(ProjectField::StartDate) => {
-            if input_buffer_owned.to_lowercase() == "today" {
-                current_project.project_start_date = Local::now().date_naive();
-            }
-            else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
-                current_project.project_start_date = date;
-            } else {
-                app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
-            }
-        }
-        FocusArea::Project(ProjectField::WeekToShow) => {
-            if let Ok(week) = input_buffer_owned.parse() {
-                current_project.week_to_show = week;
-            } else {
-                app.status_message = "Invalid number for week.".to_string();
+        FocusArea::Project(field) => {
+            let current_project = app.get_current_project_mut();
+            match field {
+                ProjectField::Name => current_project.project_name = input_buffer_owned.clone(),
+                ProjectField::StartDate => {
+                    if input_buffer_owned.to_lowercase() == "today" {
+                        current_project.project_start_date = Local::now().date_naive();
+                    }
+                    else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
+                        current_project.project_start_date = date;
+                    } else {
+                        app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
+                    }
+                }
+                ProjectField::WeekToShow => {
+                    if let Ok(week) = input_buffer_owned.parse() {
+                        current_project.week_to_show = week;
+                    } else {
+                        app.status_message = "Invalid number for week.".to_string();
+                    }
+                }
             }
         }
         FocusArea::Tasks => {
             if let Some(index) = selected_table_index {
-                let task = &mut current_project.tasks[index];
-                match selected_task_field {
-                    TaskField::Name => task.name = input_buffer_owned.clone(),
-                    TaskField::AssignedTo => task.assigned_to = input_buffer_owned.clone(),
-                    TaskField::Duration => {
-                        let mut duration = task.duration;
-                        let trimmed = input_buffer_owned.trim();
-                        if trimmed.ends_with('w') {
-                            if let Ok(val) = trimmed[..trimmed.len()-1].parse::<i64>() {
-                                duration = val * 7;
+                if selected_task_field == TaskField::Dependencies {
+                    let display_ids = app.generate_task_display_ids();
+                    let reverse_id_map: HashMap<String, u32> = display_ids.iter().map(|(id, display)| (display.clone(), *id)).collect();
+                    let tasks_clone = app.get_current_project().tasks.clone(); // Use a clone for validation
+
+                    let new_deps: Vec<u32> = input_buffer_owned.split(',')
+                        .filter_map(|s| {
+                            let trimmed = s.trim();
+                            if let Some(id) = reverse_id_map.get(trimmed) {
+                                return Some(*id);
                             }
-                        } else if trimmed.ends_with('m') {
-                            if let Ok(val) = trimmed[..trimmed.len()-1].parse::<i64>() {
-                                duration = val * 30;
+                            if let Ok(id) = trimmed.parse::<u32>() {
+                                if tasks_clone.iter().any(|t| t.id == id) {
+                                    return Some(id);
+                                }
                             }
-                        } else if trimmed.ends_with('y') {
-                            if let Ok(val) = trimmed[..trimmed.len()-1].parse::<i64>() {
-                                duration = val * 365;
-                            }
-                        } else if let Ok(val) = trimmed.parse::<i64>() {
-                            duration = val;
-                        }
-                        task.duration = duration;
-                    },
-                    TaskField::Progress => task.progress = input_buffer_owned.parse().unwrap_or(task.progress).min(100),
-                    TaskField::Dependencies => {
-                        task.dependencies = input_buffer_owned.split(',')
-                            .filter_map(|s| s.trim().parse().ok())
-                            .collect();
-                        if !task.dependencies.is_empty() {
-                            task.manual_start_date = None;
-                        }
+                            None
+                        })
+                        .collect();
+                    
+                    let task = &mut app.get_current_project_mut().tasks[index];
+                    task.dependencies = new_deps;
+                    if !task.dependencies.is_empty() {
+                        task.manual_start_date = None;
                     }
-                    TaskField::StartDate => {
-                        if input_buffer_owned.is_empty() {
-                            task.manual_start_date = None;
-                        } else if input_buffer_owned.to_lowercase() == "today" {
-                            task.manual_start_date = Some(Local::now().date_naive());
-                            task.dependencies.clear();
-                            app.status_message = "Dependencies cleared for task with manual start date.".to_string();
-                        } else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
-                            task.manual_start_date = Some(date);
-                            task.dependencies.clear();
-                            app.status_message = "Dependencies cleared for task with manual start date.".to_string();
-                        } else {
-                            app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
+                } else {
+                    let task = &mut app.get_current_project_mut().tasks[index];
+                    match selected_task_field {
+                        TaskField::Name => task.name = input_buffer_owned.clone(),
+                        TaskField::AssignedTo => task.assigned_to = input_buffer_owned.clone(),
+                        TaskField::Duration => {
+                            let mut duration = task.duration;
+                            let trimmed = input_buffer_owned.trim();
+                            if trimmed.ends_with('w') {
+                                if let Ok(val) = trimmed[..trimmed.len()-1].parse::<i64>() {
+                                    duration = val * 7;
+                                }
+                            } else if trimmed.ends_with('m') {
+                                if let Ok(val) = trimmed[..trimmed.len()-1].parse::<i64>() {
+                                    duration = val * 30;
+                                }
+                            } else if trimmed.ends_with('y') {
+                                if let Ok(val) = trimmed[..trimmed.len()-1].parse::<i64>() {
+                                    duration = val * 365;
+                                }
+                            } else if let Ok(val) = trimmed.parse::<i64>() {
+                                duration = val;
+                            }
+                            task.duration = duration;
+                        },
+                        TaskField::Progress => task.progress = input_buffer_owned.parse().unwrap_or(task.progress).min(100),
+                        TaskField::StartDate => {
+                            if input_buffer_owned.is_empty() {
+                                task.manual_start_date = None;
+                            } else if input_buffer_owned.to_lowercase() == "today" {
+                                task.manual_start_date = Some(Local::now().date_naive());
+                                task.dependencies.clear();
+                                app.status_message = "Dependencies cleared for task with manual start date.".to_string();
+                            } else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
+                                task.manual_start_date = Some(date);
+                                task.dependencies.clear();
+                                app.status_message = "Dependencies cleared for task with manual start date.".to_string();
+                            } else {
+                                app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
+                            }
                         }
+                        _ => {} // Dependencies case is handled above
                     }
                 }
             }
@@ -814,8 +1083,13 @@ fn save_buffer_to_task(app: &mut App) {
 fn calculate_column_widths(app: &App) -> [u16; 7] {
     const PADDING: u16 = 2;
     let current_project = app.get_current_project();
+    let display_ids = app.generate_task_display_ids(); // Generate IDs here too
+
     let id_col_width = current_project.tasks.iter()
-        .map(|t| UnicodeWidthStr::width(t.id.to_string().as_str()))
+        .map(|t| {
+            let id_str = display_ids.get(&t.id).cloned().unwrap_or_default();
+            UnicodeWidthStr::width(id_str.as_str())
+        })
         .max().unwrap_or(0).max(UnicodeWidthStr::width("ID")) as u16 + PADDING;
 
     let name_col_width = current_project.tasks.iter()
@@ -940,15 +1214,26 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         let selected_col_index = app.selected_task_field as usize + 1;
                         let selected_col_rect = col_layout[selected_col_index];
 
-                        let mut cursor_x = selected_col_rect.x + "> ".len() as u16 + app.input_buffer.len() as u16;
-                        match app.selected_task_field {
-                            TaskField::Name => cursor_x += 1,
-                            TaskField::AssignedTo => cursor_x -= 4,
-                            TaskField::StartDate => cursor_x -= 3,
-                            TaskField::Duration => cursor_x -= 2,
-                            TaskField::Progress => cursor_x -= 1,
-                            _ => {}
-                        }
+                        let indent_len = if app.selected_task_field == TaskField::Name {
+                            let task = &app.get_current_project().tasks[selected_row_index];
+                            let level = app.get_task_level(task);
+                            (level * 2) as u16 // 2 spaces per level
+                        } else {
+                            0
+                        };
+
+                        // The content being rendered in an active cell is `> ` + indent + buffer
+                        let prefix_len = "> ".len() as u16;
+                        
+                        // Account for column spacing, which is 1 char per column
+                        let spacing_offset = selected_col_index as u16;
+
+                        let cursor_x = selected_col_rect.x
+                                     + spacing_offset
+                                     + prefix_len
+                                     + indent_len
+                                     + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
+
                         let cursor_y = tasks_area.y + selected_row_index as u16;
                         frame.set_cursor_position((cursor_x, cursor_y));
                     }
@@ -1007,8 +1292,13 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
     let header_table = Table::new(vec![header_row], constraints.clone());
     frame.render_widget(header_table, header_area);
 
+    let display_ids = app.generate_task_display_ids();
+
     let rows = current_project.tasks.iter().enumerate().map(|(i, task)| {
         let is_selected_row = app.table_state.selected() == Some(i);
+        let level = app.get_task_level(task);
+        let indent = "  ".repeat(level as usize);
+
         let is_today_task = task.start_date.map_or(false, |start| {
             task.end_date.map_or(false, |end| app.today >= start && app.today <= end)
         });
@@ -1055,16 +1345,22 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
             }
         }};
 
-        let deps_str = task.dependencies.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ");
+        let deps_str = task.dependencies.iter()
+            .map(|dep_id| display_ids.get(dep_id).cloned().unwrap_or_else(|| "?".to_string()))
+            .collect::<Vec<_>>()
+            .join(", ");
         
+        let display_id_str = display_ids.get(&task.id).cloned().unwrap_or_else(|| task.id.to_string());
         let id_cell = if task.details.is_some() {
-            Cell::from(format!(" {}*", task.id))
+            Cell::from(format!(" {}*", display_id_str))
         } else {
-            Cell::from(format!(" {}", task.id))
+            Cell::from(format!(" {}", display_id_str))
         };
 
+        let name_display = format!("{}{}", indent, task.name);
+
         let cells_data = vec![
-            (TaskField::Name, task.name.clone()),
+            (TaskField::Name, name_display),
             (TaskField::AssignedTo, task.assigned_to.clone()),
             (TaskField::StartDate, task.start_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%Y").to_string())),
             (TaskField::Duration, task.duration.to_string()),
@@ -1082,7 +1378,15 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
             } else { Style::default() };
 
             let content_text = if is_active_cell {
-                let text = if let InputMode::Editing = app.input_mode { &app.input_buffer } else { data };
+                let text = if app.input_mode == InputMode::Editing {
+                    if *field == TaskField::Name {
+                        format!("{}{}", indent, &app.input_buffer)
+                    } else {
+                        app.input_buffer.clone()
+                    }
+                } else {
+                    data.clone()
+                };
                 format!("> {}", text)
             } else {
                 format!(" {}", data)
@@ -1208,7 +1512,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.input_mode {
-        InputMode::Normal => "Nav (j/k/h/l) | A(dd) | D(el) | (t)oday | (u)ndo | (Ctrl-r)edo | (M)ore | (Ctrl-s)ave | (C)reat/(N)ext/(P)revious Project | (q)uit",
+        InputMode::Normal => "Nav (j/k/h/l) | A(top) a(sibling) s(child) | Tab/Shift+Tab (indent/unindent) | D(el) | (t)oday | (u)ndo | (Ctrl-r)edo | (M)ore | (Ctrl-s)ave | (C)reat/(N)ext/(P)revious Project | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
     
