@@ -39,6 +39,7 @@ struct Task {
 struct ProjectData {
     project_name: String,
     project_start_date: NaiveDate,
+    project_end_date: Option<NaiveDate>,
     week_to_show: u32,
     tasks: Vec<Task>,
 }
@@ -76,6 +77,7 @@ enum TaskField {
 enum ProjectField {
     Name,
     StartDate,
+    EndDate,
     WeekToShow,
 }
 
@@ -163,6 +165,7 @@ impl App {
         let mut default_project = ProjectData {
             project_name: "New Project".to_string(),
             project_start_date: NaiveDate::from_ymd_opt(2024, 8, 1).unwrap(),
+            project_end_date: None,
             week_to_show: 0,
             tasks: vec![],
         };
@@ -181,6 +184,7 @@ impl App {
         let new_project = ProjectData {
             project_name: new_project_name.clone(),
             project_start_date: Local::now().date_naive(),
+            project_end_date: None,
             week_to_show: 0,
             tasks: vec![],
         };
@@ -868,7 +872,8 @@ fn handle_editing_mode(app: &mut App, key: KeyEvent) {
 // --- STATE HELPERS ---
 fn navigate_up(app: &mut App) {
     match app.focus_area {
-        FocusArea::Project(ProjectField::WeekToShow) => app.focus_area = FocusArea::Project(ProjectField::StartDate),
+        FocusArea::Project(ProjectField::WeekToShow) => app.focus_area = FocusArea::Project(ProjectField::EndDate),
+        FocusArea::Project(ProjectField::EndDate) => app.focus_area = FocusArea::Project(ProjectField::StartDate),
         FocusArea::Project(ProjectField::StartDate) => app.focus_area = FocusArea::Project(ProjectField::Name),
         FocusArea::Tasks => {
             if let Some(selected) = app.table_state.selected() {
@@ -887,7 +892,8 @@ fn navigate_up(app: &mut App) {
 fn navigate_down(app: &mut App) {
     match app.focus_area {
         FocusArea::Project(ProjectField::Name) => app.focus_area = FocusArea::Project(ProjectField::StartDate),
-        FocusArea::Project(ProjectField::StartDate) => app.focus_area = FocusArea::Project(ProjectField::WeekToShow),
+        FocusArea::Project(ProjectField::StartDate) => app.focus_area = FocusArea::Project(ProjectField::EndDate),
+        FocusArea::Project(ProjectField::EndDate) => app.focus_area = FocusArea::Project(ProjectField::WeekToShow),
         FocusArea::Project(ProjectField::WeekToShow) => {
             if !app.get_current_project().tasks.is_empty() {
                 app.focus_area = FocusArea::Tasks;
@@ -950,6 +956,7 @@ fn load_buffer_for_editing(app: &mut App) {
     match app.focus_area {
         FocusArea::Project(ProjectField::Name) => app.input_buffer = current_project.project_name.clone(),
         FocusArea::Project(ProjectField::StartDate) => app.input_buffer = current_project.project_start_date.format("%m/%d/%Y").to_string(),
+        FocusArea::Project(ProjectField::EndDate) => app.input_buffer = current_project.project_end_date.map_or_else(|| "".to_string(), |d| d.format("%m/%d/%Y").to_string()),
         FocusArea::Project(ProjectField::WeekToShow) => app.input_buffer = current_project.week_to_show.to_string(),
         FocusArea::Tasks => {
             if let Some(index) = app.table_state.selected() {
@@ -990,6 +997,17 @@ fn save_buffer_to_task(app: &mut App) {
                     }
                     else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
                         current_project.project_start_date = date;
+                    } else {
+                        app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
+                    }
+                }
+                ProjectField::EndDate => {
+                    if input_buffer_owned.is_empty() {
+                        current_project.project_end_date = None;
+                    } else if input_buffer_owned.to_lowercase() == "today" {
+                        current_project.project_end_date = Some(Local::now().date_naive());
+                    } else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
+                        current_project.project_end_date = Some(date);
                     } else {
                         app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
                     }
@@ -1179,12 +1197,13 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 FocusArea::Project(field) => {
                     let y_offset = match field {
                         ProjectField::Name => 1,
-                        ProjectField::StartDate => 2,
+                        ProjectField::StartDate | ProjectField::EndDate => 2,
                         ProjectField::WeekToShow => 3,
                     };
                     let x_offset = match field {
                         ProjectField::Name => "Project: ".len(),
                         ProjectField::StartDate => "Start Date: ".len(),
+                        ProjectField::EndDate => "Start Date: YYYY/MM/DD | End Date: ".len(),
                         ProjectField::WeekToShow => "Week to Show: ".len(),
                     };
                     frame.set_cursor_position(
@@ -1262,14 +1281,26 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
 
     let name_style = if app.focus_area == FocusArea::Project(ProjectField::Name) { Style::default().bg(Color::Blue) } else { Style::default() };
     let start_date_style = if app.focus_area == FocusArea::Project(ProjectField::StartDate) { Style::default().bg(Color::Blue) } else { Style::default() };
+    let end_date_style = if app.focus_area == FocusArea::Project(ProjectField::EndDate) { Style::default().bg(Color::Blue) } else { Style::default() };
     let week_style = if app.focus_area == FocusArea::Project(ProjectField::WeekToShow) { Style::default().bg(Color::Blue) } else { Style::default() };
     
     let name_text = if app.focus_area == FocusArea::Project(ProjectField::Name) && app.input_mode == InputMode::Editing { &app.input_buffer } else { &current_project.project_name };
     let start_date_text = if app.focus_area == FocusArea::Project(ProjectField::StartDate) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.project_start_date.format("%m/%d/%Y").to_string() };
+    
+    let end_date_text = if app.focus_area == FocusArea::Project(ProjectField::EndDate) && app.input_mode == InputMode::Editing {
+        app.input_buffer.clone()
+    } else {
+        current_project.project_end_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%Y").to_string())
+    };
+
     let week_text = if app.focus_area == FocusArea::Project(ProjectField::WeekToShow) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.week_to_show.to_string() };
 
     frame.render_widget(Paragraph::new(format!("Project: {} ({}/{})", name_text, app.current_project_index + 1, app.all_projects.projects.len())).style(name_style), layout[0]);
-    frame.render_widget(Paragraph::new(format!("Start Date: {}", start_date_text)).style(start_date_style), layout[1]);
+    frame.render_widget(Paragraph::new(Line::from(vec![
+        Span::styled(format!("Start Date: {}", start_date_text), start_date_style),
+        Span::raw(" | "),
+        Span::styled(format!("End Date: {}", end_date_text), end_date_style),
+    ])), layout[1]);
     frame.render_widget(Paragraph::new(format!("Week to Show: {}", week_text)).style(week_style), layout[2]);
 
     let header_area = layout[3];
@@ -1443,7 +1474,14 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     for day in 0..=date_range_days {
         let current_date = min_date + Duration::days(day);
         let is_today = current_date == app.today;
-        let day_style = if is_today { Style::default().fg(Color::Black).bg(Color::Cyan) } else { Style::default() };
+        let is_deadline_day = app.get_current_project().project_end_date == Some(current_date);
+
+        let mut day_style = Style::default();
+        if is_today {
+            day_style = day_style.fg(Color::Black).bg(Color::Cyan);
+        } else if is_deadline_day {
+            day_style = day_style.bg(Color::DarkGray).fg(Color::Red);
+        }
 
         let weekday_char = match current_date.weekday() {
             Weekday::Mon => "M",
@@ -1487,6 +1525,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
             for day in 0..=date_range_days {
                 let current_date = min_date + Duration::days(day);
                 let is_today = current_date == app.today;
+                let is_deadline_day = app.get_current_project().project_end_date == Some(current_date);
                 let is_task_day = current_date >= start && current_date <= end;
                 
                 let content = if is_task_day {
@@ -1500,7 +1539,10 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                     if is_today { "|  |" } else { "    " }
                 };
 
-                let style = if is_today { row_style.fg(Color::Cyan) } else { row_style };
+                let mut style = if is_today { row_style.fg(Color::Cyan) } else { row_style };
+                if is_deadline_day {
+                    style = style.fg(Color::Red);
+                }
                 bar_spans.push(Span::styled(content, style));
             }
         }

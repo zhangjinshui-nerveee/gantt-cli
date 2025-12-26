@@ -3,6 +3,7 @@
     {
       "project_name": "Figure-8 Core",
       "project_start_date": "2025-11-07",
+      "project_end_date": null,
       "week_to_show": 7,
       "tasks": [
         {
@@ -165,6 +166,7 @@
     {
       "project_name": "DiSeP-STATCOM",
       "project_start_date": "2025-11-07",
+      "project_end_date": null,
       "week_to_show": 7,
       "tasks": [
         {
@@ -309,6 +311,7 @@
     {
       "project_name": "startup",
       "project_start_date": "2025-11-17",
+      "project_end_date": "2026-01-10",
       "week_to_show": 5,
       "tasks": [
         {
