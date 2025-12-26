@@ -272,20 +272,26 @@ impl App {
 
     fn move_task_up(&mut self) {
         if let Some(selected_index) = self.table_state.selected() {
-            if selected_index == 0 { return; }
+            let tasks = &self.get_current_project().tasks;
+            if selected_index == 0 || selected_index >= tasks.len() { return; }
 
             let my_family_range = self.get_contiguous_family_range(selected_index);
+            let my_level = self.get_task_level(&tasks[selected_index]);
             
-            if my_family_range.start == 0 { return; }
-            
-            let target_index_before = my_family_range.start - 1;
-            let target_family_range = self.get_contiguous_family_range(target_index_before);
+            let mut target_index = my_family_range.start - 1;
+            while target_index > 0 && self.get_task_level(&tasks[target_index]) > my_level {
+                target_index -= 1;
+            }
 
+            if self.get_task_level(&tasks[target_index]) < my_level {
+                return; // Cannot move above parent
+            }
+            
             self.save_state_for_undo();
             
             let tasks_to_move: Vec<_> = self.get_current_project_mut().tasks.drain(my_family_range.clone()).collect();
             
-            let new_insert_index = target_family_range.start;
+            let new_insert_index = target_index;
             self.get_current_project_mut().tasks.splice(new_insert_index..new_insert_index, tasks_to_move);
             
             self.table_state.select(Some(new_insert_index));
@@ -295,12 +301,20 @@ impl App {
 
     fn move_task_down(&mut self) {
         if let Some(selected_index) = self.table_state.selected() {
-            let tasks_len = self.get_current_project().tasks.len();
-            let my_family_range = self.get_contiguous_family_range(selected_index);
+            let tasks = &self.get_current_project().tasks;
+            let tasks_len = tasks.len();
+            if selected_index >= tasks_len { return; }
 
-            if my_family_range.end >= tasks_len { return; }
+            let my_family_range = self.get_contiguous_family_range(selected_index);
+            let my_level = self.get_task_level(&tasks[selected_index]);
 
             let target_index = my_family_range.end;
+            if target_index >= tasks_len { return; }
+
+            if self.get_task_level(&tasks[target_index]) < my_level {
+                return; // Cannot move below parent's children
+            }
+
             let target_family_range = self.get_contiguous_family_range(target_index);
 
             self.save_state_for_undo();
