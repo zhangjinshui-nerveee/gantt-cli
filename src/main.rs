@@ -48,6 +48,8 @@ struct ProjectData {
 struct AllProjectsData {
     projects: Vec<ProjectData>,
     active_project_index: usize,
+    #[serde(default)]
+    todo_list: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -85,6 +87,7 @@ enum ProjectField {
 enum FocusArea {
     Project(ProjectField),
     Tasks,
+    TodoList,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -98,6 +101,7 @@ struct App {
     current_project_index: usize,
     today: NaiveDate,
     table_state: TableState,
+    todo_list_state: ListState,
     input_mode: InputMode,
     focus_area: FocusArea,
     selected_task_field: TaskField,
@@ -110,6 +114,7 @@ struct App {
     redo_history: Vec<ProjectState>,
     current_file_path: String, // Always "projects.json"
     details_view_open: bool,
+    todo_list_open: bool,
     details_buffer: String,
     highlight_mode: HighlightMode,
 }
@@ -120,10 +125,12 @@ impl App {
             all_projects: AllProjectsData {
                 projects: vec![],
                 active_project_index: 0,
+                todo_list: vec![],
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
             table_state: TableState::default(),
+            todo_list_state: ListState::default(),
             input_mode: InputMode::Normal,
             focus_area: FocusArea::Tasks,
             selected_task_field: TaskField::Name,
@@ -136,6 +143,7 @@ impl App {
             redo_history: vec![],
             current_file_path: "projects.json".to_string(),
             details_view_open: false,
+            todo_list_open: false,
             details_buffer: String::new(),
             highlight_mode: HighlightMode::Today,
         };
@@ -473,6 +481,58 @@ impl App {
         }
     }
 
+    fn toggle_todo_list(&mut self) {
+        self.todo_list_open = !self.todo_list_open;
+        if self.todo_list_open {
+            self.focus_area = FocusArea::TodoList;
+            if self.todo_list_state.selected().is_none() && !self.all_projects.todo_list.is_empty() {
+                self.todo_list_state.select(Some(0));
+            }
+        } else {
+            self.focus_area = FocusArea::Tasks;
+        }
+    }
+
+    fn add_selected_task_to_todo(&mut self) {
+        if let Some(idx) = self.table_state.selected() {
+            let task_name = self.get_current_project().tasks[idx].name.clone();
+            self.all_projects.todo_list.push(task_name.clone());
+            self.status_message = format!("Task '{}' added to todo list.", task_name);
+        }
+    }
+
+    fn remove_selected_todo_item(&mut self) {
+        if let Some(idx) = self.todo_list_state.selected() {
+            if idx < self.all_projects.todo_list.len() {
+                let removed = self.all_projects.todo_list.remove(idx);
+                if self.all_projects.todo_list.is_empty() {
+                    self.todo_list_state.select(None);
+                } else if idx >= self.all_projects.todo_list.len() {
+                    self.todo_list_state.select(Some(self.all_projects.todo_list.len() - 1));
+                }
+                self.status_message = format!("Item '{}' removed from todo list.", removed);
+            }
+        }
+    }
+
+    fn move_todo_item_up(&mut self) {
+        if let Some(idx) = self.todo_list_state.selected() {
+            if idx > 0 {
+                self.all_projects.todo_list.swap(idx, idx - 1);
+                self.todo_list_state.select(Some(idx - 1));
+            }
+        }
+    }
+
+    fn move_todo_item_down(&mut self) {
+        if let Some(idx) = self.todo_list_state.selected() {
+            if idx < self.all_projects.todo_list.len() - 1 {
+                self.all_projects.todo_list.swap(idx, idx + 1);
+                self.todo_list_state.select(Some(idx + 1));
+            }
+        }
+    }
+
     fn next_project(&mut self) {
         if self.all_projects.projects.len() > 1 {
             self.save_all_projects().unwrap_or_else(|_| self.status_message = "Failed to save current project before switching.".into());
@@ -739,8 +799,20 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Char('g') => go_to_top(app),
         KeyCode::Char('G') => go_to_bottom(app),
-        KeyCode::Char('K') => app.move_task_up(),
-        KeyCode::Char('J') => app.move_task_down(),
+        KeyCode::Char('K') => {
+            if app.focus_area == FocusArea::TodoList {
+                app.move_todo_item_up();
+            } else {
+                app.move_task_up();
+            }
+        }
+        KeyCode::Char('J') => {
+            if app.focus_area == FocusArea::TodoList {
+                app.move_todo_item_down();
+            } else {
+                app.move_task_down();
+            }
+        }
         KeyCode::Char('j') | KeyCode::Down => navigate_down(app),
         KeyCode::Char('k') | KeyCode::Up => navigate_up(app),
         KeyCode::Char('h') | KeyCode::Left => select_previous_field(app),
@@ -794,6 +866,13 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             }
             app.status_message = format!("Jumped to the week of today's date.");
         }
+        KeyCode::Char('T') => app.toggle_todo_list(),
+        KeyCode::Char('+') => app.add_selected_task_to_todo(),
+        KeyCode::Char('-') => {
+            if app.focus_area == FocusArea::TodoList {
+                app.remove_selected_todo_item();
+            }
+        }
         KeyCode::Char('N') => app.next_project(),
         KeyCode::Char('P') => app.previous_project(),
         KeyCode::Char('C') => app.add_new_project(),
@@ -839,6 +918,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                         }
                     }
                 }
+                FocusArea::TodoList => {}
             }
         }
         _ => {}
@@ -908,6 +988,7 @@ fn navigate_up(app: &mut App) {
         FocusArea::Project(ProjectField::WeekToShow) => app.focus_area = FocusArea::Project(ProjectField::EndDate),
         FocusArea::Project(ProjectField::EndDate) => app.focus_area = FocusArea::Project(ProjectField::StartDate),
         FocusArea::Project(ProjectField::StartDate) => app.focus_area = FocusArea::Project(ProjectField::Name),
+        FocusArea::Project(ProjectField::Name) => {}
         FocusArea::Tasks => {
             if let Some(selected) = app.table_state.selected() {
                 if selected == 0 {
@@ -918,7 +999,13 @@ fn navigate_up(app: &mut App) {
                 }
             }
         }
-        _ => {}
+        FocusArea::TodoList => {
+            if let Some(selected) = app.todo_list_state.selected() {
+                if selected > 0 {
+                    app.todo_list_state.select(Some(selected - 1));
+                }
+            }
+        }
     }
 }
 
@@ -937,6 +1024,13 @@ fn navigate_down(app: &mut App) {
             if let Some(selected) = app.table_state.selected() {
                 if selected < app.get_current_project().tasks.len() - 1 {
                     app.table_state.select(Some(selected + 1));
+                }
+            }
+        }
+        FocusArea::TodoList => {
+            if let Some(selected) = app.todo_list_state.selected() {
+                if selected < app.all_projects.todo_list.len() - 1 {
+                    app.todo_list_state.select(Some(selected + 1));
                 }
             }
         }
@@ -1010,6 +1104,7 @@ fn load_buffer_for_editing(app: &mut App) {
                 };
             }
         }
+        FocusArea::TodoList => {}
     }
 }
 
@@ -1127,6 +1222,7 @@ fn save_buffer_to_task(app: &mut App) {
                 }
             }
         }
+        FocusArea::TodoList => {}
     }
 }
 
@@ -1202,14 +1298,23 @@ fn ui(frame: &mut Frame, app: &mut App) {
         left_width = total_width.saturating_sub(min_right_width);
     }
 
+    let mut constraints = vec![Constraint::Length(left_width), Constraint::Min(0)];
+    if app.todo_list_open {
+        constraints.push(Constraint::Length(30));
+    }
+
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(left_width), Constraint::Min(0)])
+        .constraints(constraints)
         .split(content_area);
 
     let table_area = main_chunks[0];
     render_task_table(frame, table_area, app, &column_widths);
     render_gantt_chart(frame, main_chunks[1], app);
+
+    if app.todo_list_open {
+        render_todo_list(frame, main_chunks[2], app);
+    }
 
     if let Some(details_area) = details_area {
         render_details_view(frame, details_area, app);
@@ -1290,9 +1395,32 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         frame.set_cursor_position((cursor_x, cursor_y));
                     }
                 }
+                FocusArea::TodoList => {}
             }
         }
     }
+}
+
+fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Todo List")
+        .border_style(if app.focus_area == FocusArea::TodoList {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        });
+    
+    let items: Vec<ListItem> = app.all_projects.todo_list.iter()
+        .map(|item| ListItem::new(format!("• {}", item)))
+        .collect();
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::default().bg(Color::Blue).add_modifier(Modifier::BOLD))
+        .highlight_symbol("> ");
+
+    frame.render_stateful_widget(list, area, &mut app.todo_list_state);
 }
 
 fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[u16; 7]) {
@@ -1602,7 +1730,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.input_mode {
-        InputMode::Normal => "Nav (j/k/h/l) | A(top) a(sibling) s(child) | Tab/Shift+Tab (indent/unindent) | D(el) | (t)oday | (u)ndo | (Ctrl-r)edo | (M)ore | (Ctrl-s)ave | (C)reat/(N)ext/(P)revious Project | (q)uit",
+        InputMode::Normal => "Nav (j/k/h/l) | A/a/s (Add) | Tab/S-Tab (Indent) | D(el) | (t)oday | (u)ndo | (Ctrl-r)edo | (M)ore | (T)odo | +/- (Todo) | (Ctrl-s)ave | (C)/(N)/(P) Project | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
     
