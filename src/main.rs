@@ -1334,7 +1334,10 @@ fn calculate_column_widths(app: &App) -> [u16; 7] {
         .map(|t| {
             if t.dependencies.is_empty() { 0 }
             else {
-                t.dependencies.iter().map(|d| UnicodeWidthStr::width(d.to_string().as_str())).sum::<usize>() 
+                t.dependencies.iter().map(|d| {
+                    let display_id = display_ids.get(d).cloned().unwrap_or_else(|| "?".to_string());
+                    UnicodeWidthStr::width(display_id.as_str())
+                }).sum::<usize>() 
                 + (t.dependencies.len() - 1) * 2
             }
         })
