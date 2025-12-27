@@ -4,7 +4,7 @@
       "project_name": "Figure-8 Core",
       "project_start_date": "2025-11-07",
       "project_end_date": "2026-04-15",
-      "week_to_show": 7,
+      "day_offset": 7,
       "tasks": [
         {
           "id": 1,
@@ -167,142 +167,173 @@
       "project_name": "DiSeP-STATCOM",
       "project_start_date": "2025-11-07",
       "project_end_date": "2026-04-15",
-      "week_to_show": 7,
+      "day_offset": 59,
       "tasks": [
         {
           "id": 1,
-          "name": "simulation framework",
-          "assigned_to": "jinshui",
-          "duration": 7,
-          "progress": 100,
+          "name": "Software",
+          "assigned_to": "",
+          "duration": 60,
+          "progress": 80,
           "dependencies": [],
-          "manual_start_date": "2025-11-02",
+          "manual_start_date": null,
           "details": null,
           "parent_id": null
         },
         {
           "id": 2,
-          "name": "pid param refine",
-          "assigned_to": "zane",
-          "duration": 40,
-          "progress": 0,
-          "dependencies": [
-            1
-          ],
-          "manual_start_date": null,
+          "name": "simulation (plecs)",
+          "assigned_to": "jinshui",
+          "duration": 42,
+          "progress": 100,
+          "dependencies": [],
+          "manual_start_date": "2025-11-07",
           "details": null,
-          "parent_id": null
+          "parent_id": 1
         },
         {
           "id": 3,
+          "name": "pi fine tuning",
+          "assigned_to": "zane",
+          "duration": 60,
+          "progress": 0,
+          "dependencies": [
+            2
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 1
+        },
+        {
+          "id": 4,
           "name": "labview code basis",
           "assigned_to": "jinshui",
           "duration": 7,
           "progress": 100,
           "dependencies": [
-            1
+            2
           ],
           "manual_start_date": null,
           "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 4,
-          "name": "circuit assembly (thermal)",
-          "assigned_to": "Chris",
-          "duration": 14,
-          "progress": 0,
-          "dependencies": [],
-          "manual_start_date": "2025-12-16",
-          "details": null,
-          "parent_id": null
+          "parent_id": 1
         },
         {
           "id": 5,
-          "name": "circuit thermal testing",
-          "assigned_to": "zane & chris",
-          "duration": 14,
-          "progress": 0,
-          "dependencies": [
-            4
-          ],
+          "name": "Hardware",
+          "assigned_to": "",
+          "duration": 30,
+          "progress": 100,
+          "dependencies": [],
           "manual_start_date": null,
           "details": null,
           "parent_id": null
         },
         {
           "id": 6,
-          "name": "buy vol/cur adc modules",
-          "assigned_to": "maya",
-          "duration": 14,
+          "name": "module assembly",
+          "assigned_to": "zane",
+          "duration": 30,
+          "progress": 100,
+          "dependencies": [],
+          "manual_start_date": "2025-10-01",
+          "details": null,
+          "parent_id": 5
+        },
+        {
+          "id": 7,
+          "name": "module testing",
+          "assigned_to": "zane",
+          "duration": 30,
+          "progress": 100,
+          "dependencies": [
+            6
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 5
+        },
+        {
+          "id": 8,
+          "name": "i-sensor testing",
+          "assigned_to": "jinshui",
+          "duration": 7,
           "progress": 100,
           "dependencies": [],
           "manual_start_date": "2025-11-07",
           "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 7,
-          "name": "prototyping dc voltage sensor",
-          "assigned_to": "jinshui",
-          "duration": 14,
-          "progress": 0,
-          "dependencies": [
-            6
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 8,
-          "name": "current sampler test",
-          "assigned_to": "zane",
-          "duration": 14,
-          "progress": 0,
-          "dependencies": [
-            6
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
+          "parent_id": 5
         },
         {
           "id": 9,
-          "name": "inverter (as grid) test",
+          "name": "v-sensor testing",
           "assigned_to": "jinshui",
-          "duration": 21,
-          "progress": 100,
+          "duration": 14,
+          "progress": 0,
           "dependencies": [],
-          "manual_start_date": "2025-11-10",
+          "manual_start_date": "2026-01-01",
           "details": null,
-          "parent_id": null
+          "parent_id": 5
         },
         {
           "id": 10,
-          "name": "system testing",
+          "name": "System Testing",
           "assigned_to": "jinshui",
-          "duration": 20,
+          "duration": 90,
           "progress": 0,
-          "dependencies": [
-            7,
-            8,
-            9
-          ],
+          "dependencies": [],
           "manual_start_date": null,
           "details": null,
           "parent_id": null
         },
         {
           "id": 11,
-          "name": "paper drafting",
+          "name": "inverter testing",
           "assigned_to": "jinshui",
-          "duration": 100,
-          "progress": 0,
+          "duration": 35,
+          "progress": 90,
           "dependencies": [
-            1
+            7,
+            8
           ],
           "manual_start_date": null,
+          "details": null,
+          "parent_id": 10
+        },
+        {
+          "id": 12,
+          "name": "statcom wo/ v-sensor",
+          "assigned_to": "jinshui",
+          "duration": 30,
+          "progress": 0,
+          "dependencies": [
+            11
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 10
+        },
+        {
+          "id": 13,
+          "name": "statcom w/ v-sensor",
+          "assigned_to": "jinshui",
+          "duration": 30,
+          "progress": 0,
+          "dependencies": [
+            12,
+            9
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 10
+        },
+        {
+          "id": 14,
+          "name": "Paper Drafting",
+          "assigned_to": "Unassigned",
+          "duration": 42,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2026-03-01",
           "details": null,
           "parent_id": null
         }
@@ -312,7 +343,7 @@
       "project_name": "startup",
       "project_start_date": "2025-11-17",
       "project_end_date": "2026-05-30",
-      "week_to_show": 5,
+      "day_offset": 5,
       "tasks": [
         {
           "id": 1,
