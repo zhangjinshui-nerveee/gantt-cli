@@ -845,8 +845,57 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.add_new_sibling_task();
             load_buffer_for_editing(app);
         },
-        KeyCode::Tab => app.indent_task(),
-        KeyCode::BackTab => app.unindent_task(),
+        KeyCode::Char('>') => app.indent_task(),
+        KeyCode::Char('<') => app.unindent_task(),
+        KeyCode::Tab => {
+            match app.focus_area {
+                FocusArea::Project(_) => {
+                    app.focus_area = FocusArea::Tasks;
+                    if app.table_state.selected().is_none() && !app.get_current_project().tasks.is_empty() {
+                        app.table_state.select(Some(0));
+                    }
+                }
+                FocusArea::Tasks => {
+                    if app.todo_list_open {
+                        app.focus_area = FocusArea::TodoList;
+                        if app.todo_list_state.selected().is_none() && !app.all_projects.todo_list.is_empty() {
+                            app.todo_list_state.select(Some(0));
+                        }
+                    } else {
+                        app.focus_area = FocusArea::Project(ProjectField::Name);
+                    }
+                }
+                FocusArea::TodoList => {
+                    app.focus_area = FocusArea::Project(ProjectField::Name);
+                }
+            }
+        }
+        KeyCode::BackTab => {
+            match app.focus_area {
+                FocusArea::Project(_) => {
+                    if app.todo_list_open {
+                        app.focus_area = FocusArea::TodoList;
+                        if app.todo_list_state.selected().is_none() && !app.all_projects.todo_list.is_empty() {
+                            app.todo_list_state.select(Some(0));
+                        }
+                    } else {
+                        app.focus_area = FocusArea::Tasks;
+                        if app.table_state.selected().is_none() && !app.get_current_project().tasks.is_empty() {
+                            app.table_state.select(Some(0));
+                        }
+                    }
+                }
+                FocusArea::Tasks => {
+                    app.focus_area = FocusArea::Project(ProjectField::Name);
+                }
+                FocusArea::TodoList => {
+                    app.focus_area = FocusArea::Tasks;
+                    if app.table_state.selected().is_none() && !app.get_current_project().tasks.is_empty() {
+                        app.table_state.select(Some(0));
+                    }
+                }
+            }
+        },
         KeyCode::Char('s') => {
             if let Some(selected_index) = app.table_state.selected() {
                 let parent_task = &app.get_current_project().tasks[selected_index];
@@ -1771,7 +1820,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.input_mode {
-        InputMode::Normal => "Nav (j/k/h/l) | A/a/s (Add) | Tab/S-Tab (Indent) | D(el) | (t)oday | (u)ndo | (Ctrl-r)edo | (M)ore | (T)odo | +/- (Todo) | (Ctrl-s)ave | (C)/(N)/(P) Project | (q)uit",
+        InputMode::Normal => "Nav (j/k/h/l/Tab) | A/a/s (Add) | </> (Indent) | D(el) | (t)oday | (u)ndo | (Ctrl-r)edo | (M)ore | (T)odo | +/- (Todo) | (Ctrl-s)ave | (C)/(N)/(P) Project | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
     
