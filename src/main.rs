@@ -10,10 +10,11 @@ use ratatui::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::fs;
 use std::io::{self, stdout};
 use std::panic;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthStr;
 
 // --- DATA STRUCTURES ---
@@ -120,8 +121,23 @@ struct App {
     highlight_mode: HighlightMode,
 }
 
+fn get_default_data_path() -> PathBuf {
+    if let Ok(home) = env::var("HOME") {
+        let mut path = PathBuf::from(home);
+        path.push(".config");
+        path.push("gantt-cli");
+        path.push("projects.json");
+        path
+    } else {
+        PathBuf::from("projects.json")
+    }
+}
+
 impl App {
     fn new() -> Self {
+        let data_path = get_default_data_path();
+        let file_path_str = data_path.to_string_lossy().to_string();
+
         let mut app = App {
             all_projects: AllProjectsData {
                 projects: vec![],
@@ -142,7 +158,7 @@ impl App {
             gantt_area_width: 0,
             history: vec![],
             redo_history: vec![],
-            current_file_path: "projects.json".to_string(),
+            current_file_path: file_path_str.clone(),
             details_view_open: false,
             todo_list_open: false,
             details_buffer: String::new(),
@@ -151,9 +167,19 @@ impl App {
 
         let load_result = app.load_all_projects();
         if load_result.is_err() {
-            let msg = format!("Failed to load projects from {}. Starting with a new default project.", app.current_file_path);
-            app.status_message = msg;
+            // Ensure directory exists
+            if let Some(parent) = data_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+
             app.add_default_project();
+            
+            // Create the file immediately
+            if let Err(e) = app.save_all_projects() {
+                app.status_message = format!("Failed to create data file at {}: {}", file_path_str, e);
+            } else {
+                app.status_message = format!("Welcome! New database created at {}.", file_path_str);
+            }
         } else {
             let msg = format!("Projects loaded successfully from {}.", app.current_file_path);
             app.status_message = msg;
