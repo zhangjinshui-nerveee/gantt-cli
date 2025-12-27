@@ -274,8 +274,8 @@
     {
       "project_name": "PhD Defense",
       "project_start_date": "2025-12-27",
-      "project_end_date": null,
-      "day_offset": 65,
+      "project_end_date": "2026-05-30",
+      "day_offset": 0,
       "tasks": [
         {
           "id": 1,
@@ -290,9 +290,9 @@
         },
         {
           "id": 2,
-          "name": "introduction",
-          "assigned_to": "",
-          "duration": 30,
+          "name": "outline",
+          "assigned_to": "jinshui",
+          "duration": 14,
           "progress": 0,
           "dependencies": [],
           "manual_start_date": "2026-01-01",
@@ -301,9 +301,9 @@
         },
         {
           "id": 3,
-          "name": "paper merge",
+          "name": "introduction",
           "assigned_to": "",
-          "duration": 21,
+          "duration": 30,
           "progress": 0,
           "dependencies": [
             2
@@ -314,6 +314,19 @@
         },
         {
           "id": 4,
+          "name": "paper merge",
+          "assigned_to": "",
+          "duration": 21,
+          "progress": 0,
+          "dependencies": [
+            3
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 1
+        },
+        {
+          "id": 5,
           "name": "new content (papers)",
           "assigned_to": "",
           "duration": 14,
@@ -324,25 +337,25 @@
           "parent_id": 1
         },
         {
-          "id": 5,
+          "id": 6,
           "name": "proof-read",
           "assigned_to": "",
           "duration": 1,
           "progress": 0,
           "dependencies": [
-            2,
             3,
-            4
+            4,
+            5
           ],
           "manual_start_date": null,
           "details": null,
           "parent_id": 1
         },
         {
-          "id": 6,
+          "id": 7,
           "name": "Defense",
           "assigned_to": "",
-          "duration": 1,
+          "duration": 150,
           "progress": 0,
           "dependencies": [],
           "manual_start_date": null,
@@ -350,52 +363,71 @@
           "parent_id": null
         },
         {
-          "id": 7,
+          "id": 8,
           "name": "committee decide",
           "assigned_to": "",
-          "duration": 1,
+          "duration": 7,
           "progress": 0,
           "dependencies": [],
           "manual_start_date": "2025-12-27",
           "details": null,
-          "parent_id": 6
-        },
-        {
-          "id": 8,
-          "name": "schedule defense",
-          "assigned_to": "",
-          "duration": 1,
-          "progress": 0,
-          "dependencies": [],
-          "manual_start_date": "2025-12-27",
-          "details": null,
-          "parent_id": 6
+          "parent_id": 7
         },
         {
           "id": 9,
-          "name": "slides deck",
-          "assigned_to": "",
-          "duration": 1,
+          "name": "committee invitation&confirm",
+          "assigned_to": "jinshui",
+          "duration": 21,
           "progress": 0,
-          "dependencies": [],
-          "manual_start_date": "2025-12-27",
+          "dependencies": [
+            8
+          ],
+          "manual_start_date": null,
           "details": null,
-          "parent_id": 6
+          "parent_id": 7
         },
         {
           "id": 10,
+          "name": "schedule defense",
+          "assigned_to": "",
+          "duration": 21,
+          "progress": 0,
+          "dependencies": [
+            9
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 7
+        },
+        {
+          "id": 11,
+          "name": "slides deck",
+          "assigned_to": "",
+          "duration": 90,
+          "progress": 0,
+          "dependencies": [
+            2
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 7
+        },
+        {
+          "id": 12,
           "name": "presentation prep",
           "assigned_to": "",
-          "duration": 1,
+          "duration": 30,
           "progress": 0,
-          "dependencies": [],
-          "manual_start_date": "2025-12-27",
+          "dependencies": [
+            11
+          ],
+          "manual_start_date": null,
           "details": null,
-          "parent_id": 6
+          "parent_id": 7
         }
       ]
     }
   ],
-  "active_project_index": 3,
+  "active_project_index": 0,
   "todo_list": []
 }

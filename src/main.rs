@@ -1464,14 +1464,24 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         // The content being rendered in an active cell is `> ` + indent + buffer
                         let prefix_len = "> ".len() as u16;
                         
-                        // Account for column spacing, which is 1 char per column
+                        // Restore original spacing logic (1x)
                         let spacing_offset = selected_col_index as u16;
 
-                        let cursor_x = selected_col_rect.x
+                        // Per-column adjustment based on user feedback:
+                        // Name (idx 1): 0
+                        // All others (idx 2-6): 6
+                        let adjustment_offset = if selected_col_index <= 1 {
+                            0
+                        } else {
+                            6
+                        };
+
+                        let cursor_x = (selected_col_rect.x
                                      + spacing_offset
                                      + prefix_len
                                      + indent_len
-                                     + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
+                                     + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16)
+                                     .saturating_sub(adjustment_offset);
 
                         let cursor_y = tasks_area.y + selected_row_index as u16;
                         frame.set_cursor_position((cursor_x, cursor_y));
