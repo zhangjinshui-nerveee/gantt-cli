@@ -4,160 +4,16 @@
       "project_name": "Figure-8 Core",
       "project_start_date": "2025-11-07",
       "project_end_date": "2026-04-15",
-      "day_offset": 7,
+      "day_offset": 91,
       "tasks": [
         {
           "id": 1,
-          "name": "Build magcore in CAD",
-          "assigned_to": "Emmy,Hunter",
-          "duration": 7,
-          "progress": 0,
-          "dependencies": [],
-          "manual_start_date": "2025-12-16",
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 2,
-          "name": "CAD 3D model to planar structure",
-          "assigned_to": "Emmy",
-          "duration": 7,
-          "progress": 0,
-          "dependencies": [
-            1
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 3,
-          "name": "watercut plates",
-          "assigned_to": "Emmy",
-          "duration": 7,
-          "progress": 0,
-          "dependencies": [
-            2
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 4,
-          "name": "assembly mag-cores",
-          "assigned_to": "Emmy",
-          "duration": 4,
-          "progress": 0,
-          "dependencies": [
-            3
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 5,
-          "name": "COMSOL setup",
-          "assigned_to": "Burak",
-          "duration": 1,
-          "progress": 0,
-          "dependencies": [
-            1
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 6,
-          "name": "Import from CAD to COMSOL",
-          "assigned_to": "Burak",
-          "duration": 3,
-          "progress": 0,
-          "dependencies": [
-            5,
-            1
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 7,
-          "name": "simulation mag-field",
-          "assigned_to": "Burak",
-          "duration": 1,
-          "progress": 0,
-          "dependencies": [
-            2
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 8,
-          "name": "simulate inductance",
-          "assigned_to": "Burak",
-          "duration": 7,
-          "progress": 0,
-          "dependencies": [
-            7
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 9,
-          "name": "measurement inductance w/ multimeter",
-          "assigned_to": "Emmy",
-          "duration": 3,
-          "progress": 0,
-          "dependencies": [
-            4
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 10,
-          "name": "integrate core to circuit",
-          "assigned_to": "Jinshui",
-          "duration": 1,
-          "progress": 0,
-          "dependencies": [
-            9
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 11,
-          "name": "system testing",
-          "assigned_to": "jinshui",
-          "duration": 21,
-          "progress": 0,
-          "dependencies": [
-            10
-          ],
-          "manual_start_date": null,
-          "details": null,
-          "parent_id": null
-        },
-        {
-          "id": 12,
           "name": "paper drafting ",
           "assigned_to": "all",
-          "duration": 30,
+          "duration": 60,
           "progress": 0,
-          "dependencies": [
-            9
-          ],
-          "manual_start_date": null,
+          "dependencies": [],
+          "manual_start_date": "2026-02-01",
           "details": null,
           "parent_id": null
         }
@@ -340,19 +196,19 @@
       ]
     },
     {
-      "project_name": "startup",
+      "project_name": "Grid Co",
       "project_start_date": "2025-11-17",
       "project_end_date": "2026-05-30",
-      "day_offset": 5,
+      "day_offset": 40,
       "tasks": [
         {
           "id": 1,
           "name": "update pitching deck",
           "assigned_to": "alex",
-          "duration": 21,
+          "duration": 60,
           "progress": 30,
           "dependencies": [],
-          "manual_start_date": null,
+          "manual_start_date": "2025-12-27",
           "details": null,
           "parent_id": null
         },
@@ -371,7 +227,7 @@
           "id": 3,
           "name": "alternative research",
           "assigned_to": "Unassigned",
-          "duration": 1,
+          "duration": 10,
           "progress": 0,
           "dependencies": [
             2
@@ -414,11 +270,132 @@
           "parent_id": null
         }
       ]
+    },
+    {
+      "project_name": "PhD Defense",
+      "project_start_date": "2025-12-27",
+      "project_end_date": null,
+      "day_offset": 65,
+      "tasks": [
+        {
+          "id": 1,
+          "name": "Thesis",
+          "assigned_to": "",
+          "duration": 120,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2026-01-01",
+          "details": null,
+          "parent_id": null
+        },
+        {
+          "id": 2,
+          "name": "introduction",
+          "assigned_to": "",
+          "duration": 30,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2026-01-01",
+          "details": null,
+          "parent_id": 1
+        },
+        {
+          "id": 3,
+          "name": "paper merge",
+          "assigned_to": "",
+          "duration": 21,
+          "progress": 0,
+          "dependencies": [
+            2
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 1
+        },
+        {
+          "id": 4,
+          "name": "new content (papers)",
+          "assigned_to": "",
+          "duration": 14,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2026-03-01",
+          "details": null,
+          "parent_id": 1
+        },
+        {
+          "id": 5,
+          "name": "proof-read",
+          "assigned_to": "",
+          "duration": 1,
+          "progress": 0,
+          "dependencies": [
+            2,
+            3,
+            4
+          ],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": 1
+        },
+        {
+          "id": 6,
+          "name": "Defense",
+          "assigned_to": "",
+          "duration": 1,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": null,
+          "details": null,
+          "parent_id": null
+        },
+        {
+          "id": 7,
+          "name": "committee decide",
+          "assigned_to": "",
+          "duration": 1,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2025-12-27",
+          "details": null,
+          "parent_id": 6
+        },
+        {
+          "id": 8,
+          "name": "schedule defense",
+          "assigned_to": "",
+          "duration": 1,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2025-12-27",
+          "details": null,
+          "parent_id": 6
+        },
+        {
+          "id": 9,
+          "name": "slides deck",
+          "assigned_to": "",
+          "duration": 1,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2025-12-27",
+          "details": null,
+          "parent_id": 6
+        },
+        {
+          "id": 10,
+          "name": "presentation prep",
+          "assigned_to": "",
+          "duration": 1,
+          "progress": 0,
+          "dependencies": [],
+          "manual_start_date": "2025-12-27",
+          "details": null,
+          "parent_id": 6
+        }
+      ]
     }
   ],
-  "active_project_index": 1,
-  "todo_list": [
-    "burning rate ",
-    "COMSOL setup"
-  ]
+  "active_project_index": 3,
+  "todo_list": []
 }
