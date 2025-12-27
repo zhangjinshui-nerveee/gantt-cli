@@ -722,6 +722,7 @@ impl App {
         let mut task_display_ids: HashMap<u32, String> = HashMap::new();
 
         for (i, task) in tasks.iter().enumerate() {
+            let level = self.get_task_level(task);
             if let Some(parent_id) = task.parent_id {
                 if let Some(parent_display_id) = task_display_ids.get(&parent_id) {
                     // Find how many siblings with a smaller index this task has.
@@ -729,8 +730,15 @@ impl App {
                         .filter(|t| t.parent_id == Some(parent_id))
                         .count();
                     
-                    let letter = (('a' as u8) + siblings_before as u8) as char;
-                    let display_id = format!("{}.{}", parent_display_id, letter);
+                    let part = if level % 2 == 1 {
+                        // Level 1, 3, 5... use letters
+                        ((b'a' + (siblings_before % 26) as u8) as char).to_string()
+                    } else {
+                        // Level 2, 4, 6... use numbers
+                        (siblings_before + 1).to_string()
+                    };
+                    
+                    let display_id = format!("{}{}", parent_display_id, part);
                     task_display_ids.insert(task.id, display_id);
                 } else {
                     // Parent appears after child in the list or is an orphan
