@@ -402,42 +402,6 @@ impl App {
                 task.end_date = None;
             }
         }
-
-        // --- Auto-adjust parent tasks ---
-        let mut changed = true;
-        while changed {
-            changed = false;
-            let tasks_clone = current_project.tasks.clone();
-            let parent_ids: Vec<_> = tasks_clone.iter().filter_map(|t| t.parent_id).collect();
-
-            for parent_task in &mut current_project.tasks {
-                if parent_ids.contains(&parent_task.id) { // Only process tasks that are actual parents
-                    let children: Vec<_> = tasks_clone.iter()
-                        .filter(|t| t.parent_id == Some(parent_task.id))
-                        .collect();
-                    
-                    let min_start = children.iter().filter_map(|t| t.start_date).min();
-                    let max_end = children.iter().filter_map(|t| t.end_date).max();
-
-                    let old_start = parent_task.start_date;
-                    let old_end = parent_task.end_date;
-
-                    if let Some(start) = min_start {
-                        parent_task.start_date = Some(start);
-                    }
-                    if let Some(end) = max_end {
-                        parent_task.end_date = Some(end);
-                        if let Some(start) = parent_task.start_date {
-                            parent_task.duration = (end - start).num_days() + 1;
-                        }
-                    }
-
-                    if old_start != parent_task.start_date || old_end != parent_task.end_date {
-                        changed = true;
-                    }
-                }
-            }
-        }
     }
 
     fn save_all_projects(&mut self) -> io::Result<()> {
