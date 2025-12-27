@@ -2,7 +2,7 @@
 
 # --- CONFIGURATION ---
 # REPLACE THIS with your actual "username/repo"
-GITHUB_REPO="YOUR_USERNAME/gantt-cli"
+GITHUB_REPO="zhangjinshui-nerveee/gantt-cli"
 BINARY_NAME="gantt-cli"
 INSTALL_DIR="$HOME/.local/bin"
 # ---------------------
@@ -42,10 +42,10 @@ chmod +x "$INSTALL_DIR/$BINARY_NAME"
 echo -e "${GREEN}Success! ${BINARY_NAME} has been installed to ${INSTALL_DIR}.${NC}"
 
 # 5. Check PATH
-if [[ ":$PATH:" != ":$INSTALL_DIR:"* ]]; then
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo -e "${YELLOW}Warning: ${INSTALL_DIR} is not in your PATH.${NC}"
     echo "Add the following line to your shell configuration file (.bashrc, .zshrc, etc.):"
-    echo -e "  export PATH=\"\\$HOME/.local/bin:\\$PATH\""
+    echo -e "  export PATH=\"\$HOME/.local/bin:\$PATH\""
 else
     echo "You can now run the app by typing: ${BINARY_NAME}"
 fi
