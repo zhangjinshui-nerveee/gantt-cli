@@ -119,6 +119,10 @@ struct App {
     todo_list_open: bool,
     details_buffer: String,
     highlight_mode: HighlightMode,
+    is_dirty: bool,
+    quit_pending: bool,
+    confirm_delete_project: bool,
+    deleted_projects: Vec<ProjectData>,
 }
 
 fn get_default_data_path() -> PathBuf {
@@ -163,6 +167,10 @@ impl App {
             todo_list_open: false,
             details_buffer: String::new(),
             highlight_mode: HighlightMode::Today,
+            is_dirty: false,
+            quit_pending: false,
+            confirm_delete_project: false,
+            deleted_projects: vec![],
         };
 
         let load_result = app.load_all_projects();
@@ -211,6 +219,7 @@ impl App {
         self.current_project_index = self.all_projects.projects.len() - 1;
         self.history.clear();
         self.redo_history.clear();
+        self.is_dirty = true;
     }
 
     fn add_new_project(&mut self) {
@@ -231,6 +240,44 @@ impl App {
         self.table_state.select(None); // Deselect any task
         self.focus_area = FocusArea::Project(ProjectField::Name); // Focus on new project name
         self.status_message = format!("New project '{}' created.", new_project_name);
+        self.is_dirty = true;
+    }
+
+    fn delete_current_project(&mut self) {
+        if self.all_projects.projects.len() <= 1 {
+            self.status_message = "Cannot delete the only project.".to_string();
+            return;
+        }
+
+        let removed_project = self.all_projects.projects.remove(self.current_project_index);
+        self.deleted_projects.push(removed_project.clone());
+        
+        // Adjust index
+        if self.current_project_index >= self.all_projects.projects.len() {
+            self.current_project_index = self.all_projects.projects.len() - 1;
+        }
+
+        self.history.clear(); // Clear history for the previous project context
+        self.redo_history.clear();
+        self.recalculate_schedule();
+        self.status_message = format!("Deleted project '{}'. Press Ctrl+u to restore.", removed_project.project_name);
+        self.is_dirty = true;
+    }
+
+    fn restore_deleted_project(&mut self) {
+        if let Some(project) = self.deleted_projects.pop() {
+            self.all_projects.projects.push(project.clone());
+            self.current_project_index = self.all_projects.projects.len() - 1;
+            
+            self.history.clear();
+            self.redo_history.clear();
+            self.recalculate_schedule();
+            
+            self.status_message = format!("Restored project '{}'.", project.project_name);
+            self.is_dirty = true;
+        } else {
+            self.status_message = "No deleted projects to restore.".to_string();
+        }
     }
 
     fn get_current_project(&self) -> &ProjectData {
@@ -435,6 +482,8 @@ impl App {
         let json_data = serde_json::to_string_pretty(&self.all_projects)?;
         fs::write(&self.current_file_path, json_data)?;
         self.status_message = format!("All projects saved successfully to {}!", self.current_file_path);
+        self.is_dirty = false;
+        self.quit_pending = false;
         Ok(())
     }
 
@@ -458,6 +507,7 @@ impl App {
             project_data: self.get_current_project().clone(),
         });
         self.redo_history.clear();
+        self.is_dirty = true;
     }
 
     fn undo(&mut self) {
@@ -468,6 +518,7 @@ impl App {
             *self.get_current_project_mut() = previous_state.project_data;
             self.recalculate_schedule();
             self.status_message = "Undo successful.".to_string();
+            self.is_dirty = true;
         } else {
             self.status_message = "Nothing to undo.".to_string();
         }
@@ -481,6 +532,7 @@ impl App {
             *self.get_current_project_mut() = next_state.project_data;
             self.recalculate_schedule();
             self.status_message = "Redo successful.".to_string();
+            self.is_dirty = true;
         } else {
             self.status_message = "Nothing to redo.".to_string();
         }
@@ -507,6 +559,7 @@ impl App {
             } else {
                 self.all_projects.todo_list.push(task_name.clone());
                 self.status_message = format!("Task '{}' added to todo list.", task_name);
+                self.is_dirty = true;
             }
         }
     }
@@ -521,6 +574,7 @@ impl App {
                     self.todo_list_state.select(Some(self.all_projects.todo_list.len() - 1));
                 }
                 self.status_message = format!("Item '{}' removed from todo list.", removed);
+                self.is_dirty = true;
             }
         }
     }
@@ -530,6 +584,7 @@ impl App {
             if idx > 0 {
                 self.all_projects.todo_list.swap(idx, idx - 1);
                 self.todo_list_state.select(Some(idx - 1));
+                self.is_dirty = true;
             }
         }
     }
@@ -539,6 +594,7 @@ impl App {
             if idx < self.all_projects.todo_list.len() - 1 {
                 self.all_projects.todo_list.swap(idx, idx + 1);
                 self.todo_list_state.select(Some(idx + 1));
+                self.is_dirty = true;
             }
         }
     }
@@ -836,17 +892,47 @@ fn handle_events(app: &mut App) -> io::Result<()> {
 }
 
 fn handle_normal_mode(app: &mut App, key: KeyEvent) {
+    if app.quit_pending && key.code != KeyCode::Char('q') {
+        app.quit_pending = false;
+        app.status_message = "Quit cancelled.".to_string();
+    }
+
+    if app.confirm_delete_project {
+         let is_ctrl_d = key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('d');
+         if !is_ctrl_d {
+             app.confirm_delete_project = false;
+             app.status_message = "Delete cancelled.".to_string();
+         }
+    }
+
     if key.modifiers == KeyModifiers::CONTROL {
         match key.code {
             KeyCode::Char('s') => { app.save_all_projects().unwrap_or_else(|_| app.status_message = "Failed to save projects.".into()); },
             KeyCode::Char('r') => app.redo(),
+            KeyCode::Char('d') => {
+                 if app.confirm_delete_project {
+                     app.delete_current_project();
+                     app.confirm_delete_project = false;
+                 } else {
+                     app.confirm_delete_project = true;
+                     app.status_message = format!("Delete project '{}'? Press Ctrl+d again to confirm.", app.get_current_project().project_name);
+                 }
+            },
+            KeyCode::Char('u') => app.restore_deleted_project(),
             _ => {}
         }
         return;
     }
 
     match key.code {
-        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('q') => {
+            if app.is_dirty && !app.quit_pending {
+                app.quit_pending = true;
+                app.status_message = "Unsaved changes! Press 'q' again to discard changes, or Ctrl+s to save.".to_string();
+            } else {
+                app.should_quit = true;
+            }
+        },
         KeyCode::Char('g') => go_to_top(app),
         KeyCode::Char('G') => go_to_bottom(app),
         KeyCode::Char('K') => {
@@ -1530,7 +1616,15 @@ fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
         });
     
     let items: Vec<ListItem> = app.all_projects.todo_list.iter()
-        .map(|item| ListItem::new(format!("• {}", item)))
+        .enumerate()
+        .map(|(i, item)| {
+            let style = if i < 3 {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            ListItem::new(format!("• {}", item)).style(style)
+        })
         .collect();
 
     let list = List::new(items)
@@ -1643,7 +1737,9 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
             false
         };
 
-        let mut row_style = if is_overdue {
+        let mut row_style = if task.progress == 100 {
+            Style::default().fg(Color::DarkGray)
+        } else if is_overdue {
             Style::default().fg(Color::Red)
         } else { match app.highlight_mode {
             HighlightMode::Today => {
@@ -1859,7 +1955,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.input_mode {
-        InputMode::Normal => "Nav (j/k/h/l/Tab) | A/a/s (Add) | </> (Indent) | D(el) | (t)oday | (u)ndo | (Ctrl-r)edo | (M)ore | (T)odo | +/- (Todo) | (Ctrl-s)ave | (C)/(N)/(P) Project | (q)uit",
+        InputMode::Normal => "Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | Ctrl-d(DelProj) | Ctrl-u(ResProj) | (t)oday | u/^r(Undo/Redo) | (M)ore | (T)odo | (Ctrl-s)ave | C/N/P(Proj) | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
     
