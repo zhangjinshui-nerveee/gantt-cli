@@ -655,6 +655,24 @@ impl App {
         }
     }
 
+    fn move_project_forward(&mut self) {
+        if self.current_project_index < self.all_projects.projects.len() - 1 {
+            self.all_projects.projects.swap(self.current_project_index, self.current_project_index + 1);
+            self.current_project_index += 1;
+            self.status_message = format!("Moved project '{}' forward.", self.get_current_project().project_name);
+            self.is_dirty = true;
+        }
+    }
+
+    fn move_project_backward(&mut self) {
+        if self.current_project_index > 0 {
+            self.all_projects.projects.swap(self.current_project_index, self.current_project_index - 1);
+            self.current_project_index -= 1;
+            self.status_message = format!("Moved project '{}' backward.", self.get_current_project().project_name);
+            self.is_dirty = true;
+        }
+    }
+
     fn get_task_level(&self, task: &Task) -> u32 {
         let mut level = 0;
         let mut current_parent_id = task.parent_id;
@@ -919,6 +937,8 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                  }
             },
             KeyCode::Char('u') => app.restore_deleted_project(),
+            KeyCode::Char('n') => app.move_project_forward(),
+            KeyCode::Char('p') => app.move_project_backward(),
             _ => {}
         }
         return;
@@ -1955,7 +1975,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.input_mode {
-        InputMode::Normal => "Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | Ctrl-d(DelProj) | Ctrl-u(ResProj) | (t)oday | u/^r(Undo/Redo) | (M)ore | (T)odo | (Ctrl-s)ave | C/N/P(Proj) | (q)uit",
+        InputMode::Normal => "Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | Ctrl-d(DelProj) | Ctrl-u(ResProj) | (t)oday | u/^r(Undo/Redo) | (M)ore | (T)odo | (Ctrl-s)ave | C/N/P(Proj) | ^n/^p(Mov) | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
     
