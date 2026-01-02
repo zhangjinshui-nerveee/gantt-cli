@@ -82,8 +82,8 @@ struct AllProjectsData {
 }
 
 #[derive(Clone)]
-struct ProjectState {
-    project_data: ProjectData,
+struct HistoryState {
+    all_projects: AllProjectsData,
 }
 
 // --- APPLICATION STATE ---
@@ -139,8 +139,8 @@ struct App {
     should_quit: bool,
     status_message: String,
     gantt_area_width: u16,
-    history: Vec<ProjectState>,
-    redo_history: Vec<ProjectState>,
+    history: Vec<HistoryState>,
+    redo_history: Vec<HistoryState>,
     current_file_path: String, // Always "projects.json"
     details_view_open: bool,
     todo_list_open: bool,
@@ -530,8 +530,9 @@ impl App {
     }
 
     fn save_state_for_undo(&mut self) {
-        self.history.push(ProjectState {
-            project_data: self.get_current_project().clone(),
+        self.all_projects.active_project_index = self.current_project_index;
+        self.history.push(HistoryState {
+            all_projects: self.all_projects.clone(),
         });
         self.redo_history.clear();
         self.is_dirty = true;
@@ -539,10 +540,12 @@ impl App {
 
     fn undo(&mut self) {
         if let Some(previous_state) = self.history.pop() {
-            self.redo_history.push(ProjectState {
-                project_data: self.get_current_project().clone(),
+            self.all_projects.active_project_index = self.current_project_index;
+            self.redo_history.push(HistoryState {
+                all_projects: self.all_projects.clone(),
             });
-            *self.get_current_project_mut() = previous_state.project_data;
+            self.all_projects = previous_state.all_projects;
+            self.current_project_index = self.all_projects.active_project_index;
             self.recalculate_schedule();
             self.status_message = "Undo successful.".to_string();
             self.is_dirty = true;
@@ -553,10 +556,12 @@ impl App {
 
     fn redo(&mut self) {
         if let Some(next_state) = self.redo_history.pop() {
-            self.history.push(ProjectState {
-                project_data: self.get_current_project().clone(),
+            self.all_projects.active_project_index = self.current_project_index;
+            self.history.push(HistoryState {
+                all_projects: self.all_projects.clone(),
             });
-            *self.get_current_project_mut() = next_state.project_data;
+            self.all_projects = next_state.all_projects;
+            self.current_project_index = self.all_projects.active_project_index;
             self.recalculate_schedule();
             self.status_message = "Redo successful.".to_string();
             self.is_dirty = true;
@@ -584,6 +589,7 @@ impl App {
             if self.all_projects.todo_list.iter().any(|t| t.text == task_name) {
                 self.status_message = format!("Task '{}' is already in the todo list.", task_name);
             } else {
+                self.save_state_for_undo();
                 self.all_projects.todo_list.push(TodoItem { text: task_name.clone(), completed: false, description: String::new() });
                 self.status_message = format!("Task '{}' added to todo list.", task_name);
                 self.is_dirty = true;
@@ -594,6 +600,7 @@ impl App {
     fn remove_selected_todo_item(&mut self) {
         if let Some(idx) = self.todo_list_state.selected() {
             if idx < self.all_projects.todo_list.len() {
+                self.save_state_for_undo();
                 let removed = self.all_projects.todo_list.remove(idx);
                 if self.all_projects.todo_list.is_empty() {
                     self.todo_list_state.select(None);
@@ -609,6 +616,7 @@ impl App {
     fn move_todo_item_up(&mut self) {
         if let Some(idx) = self.todo_list_state.selected() {
             if idx > 0 {
+                self.save_state_for_undo();
                 self.all_projects.todo_list.swap(idx, idx - 1);
                 self.todo_list_state.select(Some(idx - 1));
                 self.is_dirty = true;
@@ -619,6 +627,7 @@ impl App {
     fn move_todo_item_down(&mut self) {
         if let Some(idx) = self.todo_list_state.selected() {
             if idx < self.all_projects.todo_list.len() - 1 {
+                self.save_state_for_undo();
                 self.all_projects.todo_list.swap(idx, idx + 1);
                 self.todo_list_state.select(Some(idx + 1));
                 self.is_dirty = true;
@@ -1165,9 +1174,19 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char(' ') => {
             if app.focus_area == FocusArea::TodoList {
                 if let Some(idx) = app.todo_list_state.selected() {
+                    app.save_state_for_undo();
+                    let mut was_just_finished = false;
                     if let Some(item) = app.all_projects.todo_list.get_mut(idx) {
                         item.completed = !item.completed;
+                        was_just_finished = item.completed;
                         app.is_dirty = true;
+                    }
+                    if was_just_finished {
+                        app.sync_project_with_todo_selection();
+                        app.focus_area = FocusArea::Tasks;
+                        app.selected_task_field = TaskField::Progress;
+                        app.input_mode = InputMode::Editing;
+                        load_buffer_for_editing(app);
                     }
                 }
             }
