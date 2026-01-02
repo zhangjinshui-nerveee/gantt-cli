@@ -79,6 +79,8 @@ struct AllProjectsData {
     active_project_index: usize,
     #[serde(default, deserialize_with = "deserialize_todo_list")]
     todo_list: Vec<TodoItem>,
+    #[serde(default)]
+    last_todo_reset_date: Option<NaiveDate>,
 }
 
 #[derive(Clone)]
@@ -174,6 +176,7 @@ impl App {
                 projects: vec![],
                 active_project_index: 0,
                 todo_list: vec![],
+                last_todo_reset_date: None,
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
@@ -228,7 +231,44 @@ impl App {
         }
 
         app.recalculate_schedule();
+        app.check_todo_reset();
         app
+    }
+
+    fn check_todo_reset(&mut self) {
+        let now = Local::now();
+        let today = now.date_naive();
+        
+        // Target reset time is 12:00:00 (12 PM)
+        let today_noon = today.and_hms_opt(12, 0, 0).unwrap().and_local_timezone(Local).unwrap();
+        
+        let last_reset_date = self.all_projects.last_todo_reset_date;
+        
+        let needs_reset = match last_reset_date {
+            None => {
+                // If never reset, and it's past noon today, reset now.
+                now >= today_noon
+            },
+            Some(d) if d < today => {
+                if now >= today_noon {
+                    true // It's a new day and past noon
+                } else {
+                    // It's a new day but before noon. 
+                    // We only reset if we missed YESTERDAY's noon.
+                    d < today.pred_opt().unwrap()
+                }
+            },
+            _ => false, // Already reset today
+        };
+
+        if needs_reset {
+            self.all_projects.todo_list.clear();
+            self.all_projects.last_todo_reset_date = Some(today);
+            self.is_dirty = true;
+            // No status message here to avoid spamming on every startup, 
+            // but we ensure it's saved.
+            let _ = self.save_all_projects();
+        }
     }
 
     fn add_default_project(&mut self) {
@@ -924,6 +964,7 @@ fn main() -> io::Result<()> {
 fn run_app(app: &mut App) -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     while !app.should_quit {
+        app.check_todo_reset();
         terminal.draw(|f| ui(f, app))?;
         handle_events(app)?;
     }
