@@ -79,8 +79,6 @@ struct AllProjectsData {
     active_project_index: usize,
     #[serde(default, deserialize_with = "deserialize_todo_list")]
     todo_list: Vec<TodoItem>,
-    #[serde(default)]
-    last_todo_reset_date: Option<NaiveDate>,
 }
 
 #[derive(Clone)]
@@ -176,7 +174,6 @@ impl App {
                 projects: vec![],
                 active_project_index: 0,
                 todo_list: vec![],
-                last_todo_reset_date: None,
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
@@ -231,44 +228,7 @@ impl App {
         }
 
         app.recalculate_schedule();
-        app.check_todo_reset();
         app
-    }
-
-    fn check_todo_reset(&mut self) {
-        let now = Local::now();
-        let today = now.date_naive();
-        
-        // Target reset time is 12:00:00 (12 PM)
-        let today_noon = today.and_hms_opt(12, 0, 0).unwrap().and_local_timezone(Local).unwrap();
-        
-        let last_reset_date = self.all_projects.last_todo_reset_date;
-        
-        let needs_reset = match last_reset_date {
-            None => {
-                // If never reset, and it's past noon today, reset now.
-                now >= today_noon
-            },
-            Some(d) if d < today => {
-                if now >= today_noon {
-                    true // It's a new day and past noon
-                } else {
-                    // It's a new day but before noon. 
-                    // We only reset if we missed YESTERDAY's noon.
-                    d < today.pred_opt().unwrap()
-                }
-            },
-            _ => false, // Already reset today
-        };
-
-        if needs_reset {
-            self.all_projects.todo_list.clear();
-            self.all_projects.last_todo_reset_date = Some(today);
-            self.is_dirty = true;
-            // No status message here to avoid spamming on every startup, 
-            // but we ensure it's saved.
-            let _ = self.save_all_projects();
-        }
     }
 
     fn add_default_project(&mut self) {
@@ -964,7 +924,6 @@ fn main() -> io::Result<()> {
 fn run_app(app: &mut App) -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     while !app.should_quit {
-        app.check_todo_reset();
         terminal.draw(|f| ui(f, app))?;
         handle_events(app)?;
     }
@@ -1217,12 +1176,40 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 if let Some(idx) = app.todo_list_state.selected() {
                     app.save_state_for_undo();
                     let mut was_just_finished = false;
+                    let mut todo_description = String::new();
+                    let mut todo_text = String::new();
                     if let Some(item) = app.all_projects.todo_list.get_mut(idx) {
                         item.completed = !item.completed;
                         was_just_finished = item.completed;
+                        todo_description = item.description.clone();
+                        todo_text = item.text.clone();
                         app.is_dirty = true;
                     }
                     if was_just_finished {
+                        if !todo_description.is_empty() {
+                            let mut target = None;
+                            if let Some(t_idx) = app.get_current_project().tasks.iter().position(|t| t.name == todo_text) {
+                                target = Some((app.current_project_index, t_idx));
+                            } else {
+                                for (p_idx, proj) in app.all_projects.projects.iter().enumerate() {
+                                    if let Some(t_idx) = proj.tasks.iter().position(|t| t.name == todo_text) {
+                                        target = Some((p_idx, t_idx));
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if let Some((p_idx, t_idx)) = target {
+                                let task = &mut app.all_projects.projects[p_idx].tasks[t_idx];
+                                let mut details = task.details.clone().unwrap_or_default();
+                                if !details.is_empty() && !details.ends_with('\n') {
+                                    details.push('\n');
+                                }
+                                details.push_str(&format!("{}: {}", app.today.format("%m/%d/%Y"), todo_description));
+                                task.details = Some(details);
+                            }
+                        }
+
                         app.sync_project_with_todo_selection();
                         app.focus_area = FocusArea::Tasks;
                         app.selected_task_field = TaskField::Progress;
@@ -1815,15 +1802,17 @@ fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
                              && app.todo_list_state.selected() == Some(i);
 
             let desc_content = if is_editing {
-                format!("    > {}", app.input_buffer)
+                format!("  > {}", app.input_buffer)
             } else {
-                format!("    {}", item.description)
+                format!("  {}", item.description)
             };
             
-            let desc_style = if is_editing {
-                 Style::default().fg(Color::Cyan)
+            let desc_style = if item.completed {
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+            } else if is_editing {
+                Style::default().fg(Color::Cyan)
             } else {
-                 Style::default().fg(Color::Indexed(247))
+                Style::default().fg(Color::Indexed(247))
             };
 
             let desc_line = Line::from(desc_content).style(desc_style);
