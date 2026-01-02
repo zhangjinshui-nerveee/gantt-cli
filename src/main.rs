@@ -8,7 +8,7 @@ use ratatui::{
     prelude::*,
     widgets::{block::*, *},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -46,12 +46,37 @@ struct ProjectData {
     tasks: Vec<Task>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct TodoItem {
+    text: String,
+    #[serde(default)]
+    completed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TodoItemInput {
+    String(String),
+    Struct(TodoItem),
+}
+
+fn deserialize_todo_list<'de, D>(deserializer: D) -> Result<Vec<TodoItem>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let items: Vec<TodoItemInput> = Vec::deserialize(deserializer)?;
+    Ok(items.into_iter().map(|item| match item {
+        TodoItemInput::String(s) => TodoItem { text: s, completed: false },
+        TodoItemInput::Struct(s) => s,
+    }).collect())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct AllProjectsData {
     projects: Vec<ProjectData>,
     active_project_index: usize,
-    #[serde(default)]
-    todo_list: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_todo_list")]
+    todo_list: Vec<TodoItem>,
 }
 
 #[derive(Clone)]
@@ -554,10 +579,10 @@ impl App {
     fn add_selected_task_to_todo(&mut self) {
         if let Some(idx) = self.table_state.selected() {
             let task_name = self.get_current_project().tasks[idx].name.clone();
-            if self.all_projects.todo_list.contains(&task_name) {
+            if self.all_projects.todo_list.iter().any(|t| t.text == task_name) {
                 self.status_message = format!("Task '{}' is already in the todo list.", task_name);
             } else {
-                self.all_projects.todo_list.push(task_name.clone());
+                self.all_projects.todo_list.push(TodoItem { text: task_name.clone(), completed: false });
                 self.status_message = format!("Task '{}' added to todo list.", task_name);
                 self.is_dirty = true;
             }
@@ -573,7 +598,7 @@ impl App {
                 } else if idx >= self.all_projects.todo_list.len() {
                     self.todo_list_state.select(Some(self.all_projects.todo_list.len() - 1));
                 }
-                self.status_message = format!("Item '{}' removed from todo list.", removed);
+                self.status_message = format!("Item '{}' removed from todo list.", removed.text);
                 self.is_dirty = true;
             }
         }
@@ -601,7 +626,7 @@ impl App {
 
     fn sync_project_with_todo_selection(&mut self) {
         let task_name = if let Some(idx) = self.todo_list_state.selected() {
-            self.all_projects.todo_list.get(idx).cloned()
+            self.all_projects.todo_list.get(idx).map(|t| t.text.clone())
         } else {
             None
         };
@@ -1130,6 +1155,16 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 FocusArea::TodoList => {}
             }
         }
+        KeyCode::Char(' ') => {
+            if app.focus_area == FocusArea::TodoList {
+                if let Some(idx) = app.todo_list_state.selected() {
+                    if let Some(item) = app.all_projects.todo_list.get_mut(idx) {
+                        item.completed = !item.completed;
+                        app.is_dirty = true;
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1638,12 +1673,14 @@ fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
     let items: Vec<ListItem> = app.all_projects.todo_list.iter()
         .enumerate()
         .map(|(i, item)| {
-            let style = if i < 3 {
+            let style = if item.completed {
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+            } else if i < 3 {
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
-            ListItem::new(format!("• {}", item)).style(style)
+            ListItem::new(format!("• {}", item.text)).style(style)
         })
         .collect();
 
@@ -1723,7 +1760,9 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
         
         let is_selected_in_todo = if app.focus_area == FocusArea::TodoList {
             if let Some(todo_idx) = app.todo_list_state.selected() {
-                app.all_projects.todo_list.get(todo_idx) == Some(&task.name)
+                if let Some(item) = app.all_projects.todo_list.get(todo_idx) {
+                    item.text == task.name
+                } else { false }
             } else { false }
         } else { false };
 
