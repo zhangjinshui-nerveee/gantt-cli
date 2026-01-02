@@ -51,6 +51,8 @@ struct TodoItem {
     text: String,
     #[serde(default)]
     completed: bool,
+    #[serde(default)]
+    description: String,
 }
 
 #[derive(Deserialize)]
@@ -66,7 +68,7 @@ where
 {
     let items: Vec<TodoItemInput> = Vec::deserialize(deserializer)?;
     Ok(items.into_iter().map(|item| match item {
-        TodoItemInput::String(s) => TodoItem { text: s, completed: false },
+        TodoItemInput::String(s) => TodoItem { text: s, completed: false, description: String::new() },
         TodoItemInput::Struct(s) => s,
     }).collect())
 }
@@ -582,7 +584,7 @@ impl App {
             if self.all_projects.todo_list.iter().any(|t| t.text == task_name) {
                 self.status_message = format!("Task '{}' is already in the todo list.", task_name);
             } else {
-                self.all_projects.todo_list.push(TodoItem { text: task_name.clone(), completed: false });
+                self.all_projects.todo_list.push(TodoItem { text: task_name.clone(), completed: false, description: String::new() });
                 self.status_message = format!("Task '{}' added to todo list.", task_name);
                 self.is_dirty = true;
             }
@@ -1152,7 +1154,12 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                         }
                     }
                 }
-                FocusArea::TodoList => {}
+                FocusArea::TodoList => {
+                    if app.todo_list_state.selected().is_some() {
+                        app.input_mode = InputMode::Editing;
+                        load_buffer_for_editing(app);
+                    }
+                }
             }
         }
         KeyCode::Char(' ') => {
@@ -1350,7 +1357,13 @@ fn load_buffer_for_editing(app: &mut App) {
                 };
             }
         }
-        FocusArea::TodoList => {}
+        FocusArea::TodoList => {
+            if let Some(idx) = app.todo_list_state.selected() {
+                if idx < app.all_projects.todo_list.len() {
+                    app.input_buffer = app.all_projects.todo_list[idx].description.clone();
+                }
+            }
+        }
     }
 }
 
@@ -1468,7 +1481,14 @@ fn save_buffer_to_task(app: &mut App) {
                 }
             }
         }
-        FocusArea::TodoList => {}
+        FocusArea::TodoList => {
+            if let Some(idx) = app.todo_list_state.selected() {
+                if idx < app.all_projects.todo_list.len() {
+                    app.all_projects.todo_list[idx].description = input_buffer_owned;
+                    app.is_dirty = true;
+                }
+            }
+        }
     }
 }
 
@@ -1513,6 +1533,26 @@ fn calculate_column_widths(app: &App) -> [u16; 7] {
     [id_col_width, name_col_width, assigned_col_width, start_col_width, dur_col_width, prog_col_width, deps_col_width]
 }
 
+fn calculate_todo_list_width(app: &App) -> u16 {
+    const PADDING: u16 = 6; // Account for border, bullet, and selection symbol
+    let mut max_width = 20; // Minimum width
+
+    for item in &app.all_projects.todo_list {
+        let name_width = UnicodeWidthStr::width(item.text.as_str()) as u16;
+        let desc_width = if item.description.is_empty() { 0 } else { UnicodeWidthStr::width(item.description.as_str()) as u16 + 4 };
+        
+        max_width = max_width.max(name_width).max(desc_width);
+    }
+
+    // If editing, also account for the input buffer
+    if app.input_mode == InputMode::Editing && app.focus_area == FocusArea::TodoList {
+        let buffer_width = UnicodeWidthStr::width(app.input_buffer.as_str()) as u16 + 6;
+        max_width = max_width.max(buffer_width);
+    }
+
+    max_width + PADDING
+}
+
 // --- UI RENDERING ---
 fn ui(frame: &mut Frame, app: &mut App) {
     let main_layout = if app.details_view_open {
@@ -1549,7 +1589,8 @@ fn ui(frame: &mut Frame, app: &mut App) {
 
     let mut constraints = vec![Constraint::Length(left_width), Constraint::Min(0)];
     if app.todo_list_open {
-        constraints.push(Constraint::Length(30));
+        let todo_width = calculate_todo_list_width(app);
+        constraints.push(Constraint::Length(todo_width));
     }
 
     let main_chunks = Layout::default()
@@ -1663,13 +1704,17 @@ fn ui(frame: &mut Frame, app: &mut App) {
 fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Todo List")
+        .title("Todo List (Space: Toggle, Enter: Edit Desc)")
         .border_style(if app.focus_area == FocusArea::TodoList {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default()
         });
     
+    let top_three_finished = app.all_projects.todo_list.iter()
+        .take(3)
+        .all(|t| t.completed);
+
     let items: Vec<ListItem> = app.all_projects.todo_list.iter()
         .enumerate()
         .map(|(i, item)| {
@@ -1677,16 +1722,44 @@ fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
                 Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
             } else if i < 3 {
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else if top_three_finished {
+                Style::default().fg(Color::White)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
-            ListItem::new(format!("• {}", item.text)).style(style)
+
+            let main_text = Line::from(format!("• {}", item.text)).style(style);
+            
+            let is_editing = app.focus_area == FocusArea::TodoList 
+                             && app.input_mode == InputMode::Editing 
+                             && app.todo_list_state.selected() == Some(i);
+
+            let desc_content = if is_editing {
+                format!("    > {}", app.input_buffer)
+            } else {
+                format!("    {}", item.description)
+            };
+            
+            let desc_style = if is_editing {
+                 Style::default().fg(Color::Cyan)
+            } else {
+                 Style::default().fg(Color::Indexed(247))
+            };
+
+            let desc_line = Line::from(desc_content).style(desc_style);
+            
+            let mut lines = vec![main_text];
+            if !item.description.is_empty() || is_editing {
+                lines.push(desc_line);
+            }
+            
+            ListItem::new(lines)
         })
         .collect();
 
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(Color::Blue).add_modifier(Modifier::BOLD))
+        .highlight_style(Style::default().bg(Color::Blue))
         .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, area, &mut app.todo_list_state);
@@ -1845,7 +1918,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
         ];
 
         let mut other_cells: Vec<Cell> = cells_data.iter().map(|(field, data)| {
-            let is_active_cell = is_selected_row && app.selected_task_field == *field;
+            let is_active_cell = is_selected_row && app.focus_area == FocusArea::Tasks && app.selected_task_field == *field;
             let style = if is_active_cell {
                 match app.input_mode {
                     InputMode::Editing => Style::default().fg(Color::White).bg(Color::Magenta),
