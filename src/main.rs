@@ -79,6 +79,8 @@ struct AllProjectsData {
     active_project_index: usize,
     #[serde(default, deserialize_with = "deserialize_todo_list")]
     todo_list: Vec<TodoItem>,
+    #[serde(default)]
+    ntfy_topic: Option<String>,
 }
 
 #[derive(Clone)]
@@ -117,6 +119,7 @@ enum FocusArea {
     Project(ProjectField),
     Tasks,
     TodoList,
+    NtfyTopic,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -174,6 +177,7 @@ impl App {
                 projects: vec![],
                 active_project_index: 0,
                 todo_list: vec![],
+                ntfy_topic: None,
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
@@ -218,6 +222,10 @@ impl App {
         } else {
             let msg = format!("Projects loaded successfully from {}.", app.current_file_path);
             app.status_message = msg;
+        }
+
+        if app.all_projects.ntfy_topic.is_none() {
+            app.all_projects.ntfy_topic = Some(format!("gantt-cli-{}", Local::now().timestamp() % 1000000));
         }
         
         if !app.get_current_project().tasks.is_empty() {
@@ -304,6 +312,54 @@ impl App {
             self.is_dirty = true;
         } else {
             self.status_message = "No deleted projects to restore.".to_string();
+        }
+    }
+
+    fn push_todo_to_phone(&mut self) {
+        let topic = self.all_projects.ntfy_topic.clone().unwrap_or_else(|| "gantt-cli-default".to_string());
+        let url = format!("https://ntfy.sh/{}", topic);
+        
+        if self.all_projects.todo_list.is_empty() {
+            self.status_message = "Todo list is empty!".to_string();
+            return;
+        }
+
+        let mut body = String::new();
+        for (i, item) in self.all_projects.todo_list.iter().enumerate() {
+            let prefix = if item.completed { "✅ " } else if i < 3 { "⭐ " } else { "• " };
+            
+            let mut text = item.text.clone();
+            if item.completed {
+                text = format!("~~{}~~", text);
+            } else if i < 3 {
+                text = format!("**{}**", text);
+            }
+            
+            body.push_str(&format!("{}{}\n", prefix, text));
+            
+            if !item.description.is_empty() {
+                let mut desc = item.description.clone();
+                if item.completed {
+                    desc = format!("~~{}~~", desc);
+                }
+                body.push_str(&format!("  _{}_\n", desc));
+            }
+        }
+
+        self.status_message = "Pushing to phone...".to_string();
+        
+        match ureq::post(&url)
+            .set("Title", "Gantt-CLI Todo List")
+            .set("Markdown", "yes")
+            .set("Tags", "clipboard,calendar")
+            .send_string(&body) 
+        {
+            Ok(_) => {
+                self.status_message = format!("Todo list pushed to ntfy.sh/{}", topic);
+            },
+            Err(e) => {
+                self.status_message = format!("Failed to push: {}", e);
+            }
         }
     }
 
@@ -975,6 +1031,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             KeyCode::Char('u') => app.restore_deleted_project(),
             KeyCode::Char('n') => app.move_project_forward(),
             KeyCode::Char('p') => app.move_project_backward(),
+            KeyCode::Char('f') => app.push_todo_to_phone(),
             _ => {}
         }
         return;
@@ -1034,6 +1091,9 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     }
                 }
                 FocusArea::TodoList => {
+                    app.focus_area = FocusArea::NtfyTopic;
+                }
+                FocusArea::NtfyTopic => {
                     app.focus_area = FocusArea::Project(ProjectField::Name);
                 }
             }
@@ -1041,17 +1101,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::BackTab => {
             match app.focus_area {
                 FocusArea::Project(_) => {
-                    if app.todo_list_open {
-                        app.focus_area = FocusArea::TodoList;
-                        if app.todo_list_state.selected().is_none() && !app.all_projects.todo_list.is_empty() {
-                            app.todo_list_state.select(Some(0));
-                        }
-                    } else {
-                        app.focus_area = FocusArea::Tasks;
-                        if app.table_state.selected().is_none() && !app.get_current_project().tasks.is_empty() {
-                            app.table_state.select(Some(0));
-                        }
-                    }
+                    app.focus_area = FocusArea::NtfyTopic;
                 }
                 FocusArea::Tasks => {
                     app.focus_area = FocusArea::Project(ProjectField::Name);
@@ -1060,6 +1110,13 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     app.focus_area = FocusArea::Tasks;
                     if app.table_state.selected().is_none() && !app.get_current_project().tasks.is_empty() {
                         app.table_state.select(Some(0));
+                    }
+                }
+                FocusArea::NtfyTopic => {
+                    if app.todo_list_open {
+                        app.focus_area = FocusArea::TodoList;
+                    } else {
+                        app.focus_area = FocusArea::Tasks;
                     }
                 }
             }
@@ -1168,6 +1225,10 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                         app.input_mode = InputMode::Editing;
                         load_buffer_for_editing(app);
                     }
+                }
+                FocusArea::NtfyTopic => {
+                    app.input_mode = InputMode::Editing;
+                    load_buffer_for_editing(app);
                 }
             }
         }
@@ -1313,6 +1374,17 @@ fn navigate_up(app: &mut App) {
                 }
             }
         }
+        FocusArea::NtfyTopic => {
+            if app.todo_list_open && !app.all_projects.todo_list.is_empty() {
+                app.focus_area = FocusArea::TodoList;
+                app.todo_list_state.select(Some(app.all_projects.todo_list.len() - 1));
+            } else if !app.get_current_project().tasks.is_empty() {
+                app.focus_area = FocusArea::Tasks;
+                app.table_state.select(Some(app.get_current_project().tasks.len() - 1));
+            } else {
+                app.focus_area = FocusArea::Project(ProjectField::DayOffset);
+            }
+        }
     }
 }
 
@@ -1339,9 +1411,14 @@ fn navigate_down(app: &mut App) {
                 if selected < app.all_projects.todo_list.len() - 1 {
                     app.todo_list_state.select(Some(selected + 1));
                     app.sync_project_with_todo_selection();
+                } else {
+                    app.focus_area = FocusArea::NtfyTopic;
                 }
+            } else {
+                app.focus_area = FocusArea::NtfyTopic;
             }
         }
+        FocusArea::NtfyTopic => {}
     }
 }
 
@@ -1418,6 +1495,9 @@ fn load_buffer_for_editing(app: &mut App) {
                     app.input_buffer = app.all_projects.todo_list[idx].description.clone();
                 }
             }
+        }
+        FocusArea::NtfyTopic => {
+            app.input_buffer = app.all_projects.ntfy_topic.clone().unwrap_or_default();
         }
     }
 }
@@ -1543,6 +1623,10 @@ fn save_buffer_to_task(app: &mut App) {
                     app.is_dirty = true;
                 }
             }
+        }
+        FocusArea::NtfyTopic => {
+            app.all_projects.ntfy_topic = Some(input_buffer_owned);
+            app.is_dirty = true;
         }
     }
 }
@@ -1763,6 +1847,19 @@ fn ui(frame: &mut Frame, app: &mut App) {
                     }
                 }
                 FocusArea::TodoList => {}
+                FocusArea::NtfyTopic => {
+                    let layout = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([
+                            Constraint::Percentage(30),
+                            Constraint::Percentage(30),
+                            Constraint::Percentage(40),
+                        ])
+                        .split(footer_area);
+                    let topic_area = layout[1];
+                    let cursor_x = topic_area.x + "Topic: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
+                    frame.set_cursor_position((cursor_x, topic_area.y));
+                }
             }
         }
     }
@@ -2155,13 +2252,33 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.input_mode {
-        InputMode::Normal => "Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | Ctrl-d(DelProj) | Ctrl-u(ResProj) | (t)oday | u/^r(Undo/Redo) | (M)ore | (T)odo | (Ctrl-s)ave | C/N/P(Proj) | ^n/^p(Mov) | (q)uit",
+        InputMode::Normal => "Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | ^d/^u(Proj) | ^f(Push) | (t)oday | u/^r(Undo/Redo) | (M)ore | (T)odo | (Ctrl-s)ave | C/N/P(Proj) | ^n/^p(Mov) | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
     
-    let layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
+    let topic_display = if app.focus_area == FocusArea::NtfyTopic && app.input_mode == InputMode::Editing {
+        format!("Topic: > {}", app.input_buffer)
+    } else {
+        format!("Topic: {}", app.all_projects.ntfy_topic.as_ref().unwrap_or(&"none".into()))
+    };
+    let topic_style = if app.focus_area == FocusArea::NtfyTopic {
+        Style::default().bg(Color::Blue).fg(Color::White)
+    } else {
+        Style::default()
+    };
+
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+            Constraint::Percentage(40),
+        ])
+        .split(area);
+
     frame.render_widget(Paragraph::new(app.status_message.clone()).alignment(Alignment::Left), layout[0]);
-    frame.render_widget(Paragraph::new(help_text).alignment(Alignment::Right).wrap(Wrap { trim: true }), layout[1]);
+    frame.render_widget(Paragraph::new(topic_display).style(topic_style).alignment(Alignment::Left), layout[1]);
+    frame.render_widget(Paragraph::new(help_text).alignment(Alignment::Right).wrap(Wrap { trim: true }), layout[2]);
 }
 
 // --- TERMINAL SETUP & RESTORATION ---
