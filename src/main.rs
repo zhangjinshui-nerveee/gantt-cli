@@ -324,33 +324,48 @@ impl App {
             return;
         }
 
-        let mut body = String::new();
+        let top_three_finished = self.all_projects.todo_list.iter()
+            .take(3)
+            .all(|t| t.completed);
+
+        let mut pending_body = String::new();
+        let mut completed_body = String::new();
+
         for (i, item) in self.all_projects.todo_list.iter().enumerate() {
-            let prefix = if item.completed { "✅ " } else if i < 3 { "⭐ " } else { "• " };
+            let mut item_str = String::new();
             
-            let mut text = item.text.clone();
             if item.completed {
-                text = format!("~~{}~~", text);
-            } else if i < 3 {
-                text = format!("**{}**", text);
-            }
-            
-            body.push_str(&format!("{}{}\n", prefix, text));
-            
-            if !item.description.is_empty() {
-                let mut desc = item.description.clone();
-                if item.completed {
-                    desc = format!("~~{}~~", desc);
+                item_str.push_str(&format!("✅ {}\n", item.text));
+                if !item.description.is_empty() {
+                    item_str.push_str(&format!("   {}\n", item.description));
                 }
-                body.push_str(&format!("  _{}_\n", desc));
+                completed_body.push_str(&item_str);
+            } else {
+                let prefix = if i < 3 { "🔥 " } 
+                            else if top_three_finished { "• " }
+                            else { "◌ " }; 
+                
+                item_str.push_str(&format!("{}{}\n", prefix, item.text));
+                if !item.description.is_empty() {
+                    item_str.push_str(&format!("   {}\n", item.description));
+                }
+                pending_body.push_str(&item_str);
             }
+        }
+
+        let mut body = pending_body;
+        if !completed_body.is_empty() {
+            if !body.is_empty() {
+                body.push_str("\n");
+            }
+            body.push_str("--- COMPLETED ---\n");
+            body.push_str(&completed_body);
         }
 
         self.status_message = "Pushing to phone...".to_string();
         
         match ureq::post(&url)
             .set("Title", "Gantt-CLI Todo List")
-            .set("Markdown", "yes")
             .set("Tags", "clipboard,calendar")
             .send_string(&body) 
         {
