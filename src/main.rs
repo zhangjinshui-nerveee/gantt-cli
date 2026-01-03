@@ -328,37 +328,54 @@ impl App {
             .take(3)
             .all(|t| t.completed);
 
-        let mut pending_body = String::new();
+        let mut priority_body = String::new();
+        let mut future_body = String::new();
         let mut completed_body = String::new();
 
         for (i, item) in self.all_projects.todo_list.iter().enumerate() {
             let mut item_str = String::new();
             
             if item.completed {
-                item_str.push_str(&format!("✅ {}\n", item.text));
+                item_str.push_str(&format!("✅ **{}**\n", item.text));
                 if !item.description.is_empty() {
-                    item_str.push_str(&format!("   {}\n", item.description));
+                    item_str.push_str(&format!("  {}\n", item.description));
                 }
+                item_str.push_str("\n");
                 completed_body.push_str(&item_str);
             } else {
-                let prefix = if i < 3 { "🔥 " } 
-                            else if top_three_finished { "• " }
-                            else { "◌ " }; 
+                let is_dimmed = i >= 3 && !top_three_finished;
                 
-                item_str.push_str(&format!("{}{}\n", prefix, item.text));
-                if !item.description.is_empty() {
-                    item_str.push_str(&format!("   {}\n", item.description));
+                if is_dimmed {
+                    item_str.push_str(&format!("◌ _**{}**_\n", item.text));
+                    if !item.description.is_empty() {
+                        item_str.push_str(&format!("  _{}_\n", item.description));
+                    }
+                    item_str.push_str("\n");
+                    future_body.push_str(&item_str);
+                } else {
+                    let prefix = if i < 3 { "🔥 " } else { "• " };
+                    item_str.push_str(&format!("{}**{}**\n", prefix, item.text));
+                    if !item.description.is_empty() {
+                        item_str.push_str(&format!("  {}\n", item.description));
+                    }
+                    item_str.push_str("\n");
+                    priority_body.push_str(&item_str);
                 }
-                pending_body.push_str(&item_str);
             }
         }
 
-        let mut body = pending_body;
+        // Use a zero-width space to force the leading newline to be respected by mobile apps
+        let mut body = String::from("\u{200B}\n");
+        if !priority_body.is_empty() {
+            body.push_str("#### ⚡ PRIORITY\n");
+            body.push_str(&priority_body);
+        }
+        if !future_body.is_empty() {
+            body.push_str("#### ◌ FUTURE\n");
+            body.push_str(&future_body);
+        }
         if !completed_body.is_empty() {
-            if !body.is_empty() {
-                body.push_str("\n");
-            }
-            body.push_str("--- COMPLETED ---\n");
+            body.push_str("#### ✅ DONE\n");
             body.push_str(&completed_body);
         }
 
@@ -366,6 +383,7 @@ impl App {
         
         match ureq::post(&url)
             .set("Title", "Gantt-CLI Todo List")
+            .set("Markdown", "yes")
             .set("Tags", "clipboard,calendar")
             .send_string(&body) 
         {
