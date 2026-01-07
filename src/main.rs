@@ -153,6 +153,7 @@ struct App {
     quit_pending: bool,
     confirm_delete_project: bool,
     deleted_projects: Vec<ProjectData>,
+    todo_changed_this_session: bool,
 }
 
 fn get_default_data_path() -> PathBuf {
@@ -202,6 +203,7 @@ impl App {
             quit_pending: false,
             confirm_delete_project: false,
             deleted_projects: vec![],
+            todo_changed_this_session: false,
         };
 
         let load_result = app.load_all_projects();
@@ -682,6 +684,7 @@ impl App {
                 self.all_projects.todo_list.push(TodoItem { text: task_name.clone(), completed: false, description: String::new() });
                 self.status_message = format!("Task '{}' added to todo list.", task_name);
                 self.is_dirty = true;
+                self.todo_changed_this_session = true;
             }
         }
     }
@@ -698,7 +701,21 @@ impl App {
                 }
                 self.status_message = format!("Item '{}' removed from todo list.", removed.text);
                 self.is_dirty = true;
+                self.todo_changed_this_session = true;
             }
+        }
+    }
+
+    fn clear_completed_todo_items(&mut self) {
+        if self.all_projects.todo_list.iter().any(|t| t.completed) {
+            self.save_state_for_undo();
+            self.all_projects.todo_list.retain(|t| !t.completed);
+            self.todo_list_state.select(None);
+            self.status_message = "Cleared all completed todo items.".to_string();
+            self.is_dirty = true;
+            self.todo_changed_this_session = true;
+        } else {
+            self.status_message = "No completed items to clear.".to_string();
         }
     }
 
@@ -709,6 +726,7 @@ impl App {
                 self.all_projects.todo_list.swap(idx, idx - 1);
                 self.todo_list_state.select(Some(idx - 1));
                 self.is_dirty = true;
+                self.todo_changed_this_session = true;
             }
         }
     }
@@ -720,6 +738,7 @@ impl App {
                 self.all_projects.todo_list.swap(idx, idx + 1);
                 self.todo_list_state.select(Some(idx + 1));
                 self.is_dirty = true;
+                self.todo_changed_this_session = true;
             }
         }
     }
@@ -1016,6 +1035,9 @@ fn run_app(app: &mut App) -> io::Result<()> {
         terminal.draw(|f| ui(f, app))?;
         handle_events(app)?;
     }
+    if app.todo_changed_this_session {
+        app.push_todo_to_phone();
+    }
     Ok(())
 }
 
@@ -1210,7 +1232,13 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('N') => app.next_project(),
         KeyCode::Char('P') => app.previous_project(),
-        KeyCode::Char('C') => app.add_new_project(),
+        KeyCode::Char('C') => {
+            if app.focus_area == FocusArea::TodoList {
+                app.clear_completed_todo_items();
+            } else {
+                app.add_new_project();
+            }
+        },
         KeyCode::Char('M') => {
             if let Some(selected_index) = app.table_state.selected() {
                 app.details_view_open = !app.details_view_open;
@@ -1310,6 +1338,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                         app.input_mode = InputMode::Editing;
                         load_buffer_for_editing(app);
                     }
+                    app.todo_changed_this_session = true;
                 }
             }
         }
@@ -1654,6 +1683,7 @@ fn save_buffer_to_task(app: &mut App) {
                 if idx < app.all_projects.todo_list.len() {
                     app.all_projects.todo_list[idx].description = input_buffer_owned;
                     app.is_dirty = true;
+                    app.todo_changed_this_session = true;
                 }
             }
         }
@@ -1890,7 +1920,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         ])
                         .split(footer_area);
                     let topic_area = layout[1];
-                    let cursor_x = topic_area.x + "Topic: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
+                    let cursor_x = topic_area.x + "ntfy channel name: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
                     frame.set_cursor_position((cursor_x, topic_area.y));
                 }
             }
@@ -2285,14 +2315,14 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.input_mode {
-        InputMode::Normal => "Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | ^d/^u(Proj) | ^f(Push) | (t)oday | u/^r(Undo/Redo) | (M)ore | (T)odo | (Ctrl-s)ave | C/N/P(Proj) | ^n/^p(Mov) | (q)uit",
+        InputMode::Normal => "Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | C(lrTodo) | ^d/^u(Proj) | ^f(Push) | (t)oday | u/^r(Undo/Redo) | (M)ore | (T)odo | (Ctrl-s)ave | C/N/P(Proj) | ^n/^p(Mov) | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
     
     let topic_display = if app.focus_area == FocusArea::NtfyTopic && app.input_mode == InputMode::Editing {
-        format!("Topic: > {}", app.input_buffer)
+        format!("ntfy channel name: > {}", app.input_buffer)
     } else {
-        format!("Topic: {}", app.all_projects.ntfy_topic.as_ref().unwrap_or(&"none".into()))
+        format!("ntfy channel name: {}", app.all_projects.ntfy_topic.as_ref().unwrap_or(&"none".into()))
     };
     let topic_style = if app.focus_area == FocusArea::NtfyTopic {
         Style::default().bg(Color::Blue).fg(Color::White)
