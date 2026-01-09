@@ -593,6 +593,57 @@ impl App {
                 task.end_date = None;
             }
         }
+
+        // Second pass: adjust parent tasks based on their children
+        // Build a map of parent_id -> children
+        let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+        for task in &current_project.tasks {
+            if let Some(parent_id) = task.parent_id {
+                children_map.entry(parent_id).or_default().push(task.id);
+            }
+        }
+
+        // Find the depth of each task in the hierarchy (for processing order)
+        fn get_depth(task_id: u32, tasks: &[Task]) -> usize {
+            let task = tasks.iter().find(|t| t.id == task_id);
+            match task.and_then(|t| t.parent_id) {
+                Some(parent_id) => 1 + get_depth(parent_id, tasks),
+                None => 0,
+            }
+        }
+
+        // Get all parent task IDs sorted by depth (deepest first)
+        let mut parent_ids: Vec<u32> = children_map.keys().copied().collect();
+        parent_ids.sort_by(|a, b| {
+            let depth_a = get_depth(*a, &current_project.tasks);
+            let depth_b = get_depth(*b, &current_project.tasks);
+            depth_b.cmp(&depth_a) // Sort descending (deepest first)
+        });
+
+        // Adjust each parent based on its children
+        for parent_id in parent_ids {
+            if let Some(child_ids) = children_map.get(&parent_id) {
+                let children_start_dates: Vec<NaiveDate> = child_ids.iter()
+                    .filter_map(|id| current_project.tasks.iter().find(|t| t.id == *id))
+                    .filter_map(|t| t.start_date)
+                    .collect();
+                let children_end_dates: Vec<NaiveDate> = child_ids.iter()
+                    .filter_map(|id| current_project.tasks.iter().find(|t| t.id == *id))
+                    .filter_map(|t| t.end_date)
+                    .collect();
+
+                if !children_start_dates.is_empty() && !children_end_dates.is_empty() {
+                    let min_start = children_start_dates.into_iter().min().unwrap();
+                    let max_end = children_end_dates.into_iter().max().unwrap();
+
+                    if let Some(parent_task) = current_project.tasks.iter_mut().find(|t| t.id == parent_id) {
+                        parent_task.start_date = Some(min_start);
+                        parent_task.end_date = Some(max_end);
+                        parent_task.duration = (max_end - min_start).num_days() + 1;
+                    }
+                }
+            }
+        }
     }
 
     fn save_all_projects(&mut self) -> io::Result<()> {
