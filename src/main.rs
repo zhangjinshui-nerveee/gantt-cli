@@ -153,7 +153,7 @@ struct App {
     quit_pending: bool,
     confirm_delete_project: bool,
     deleted_projects: Vec<ProjectData>,
-    todo_changed_this_session: bool,
+    help_open: bool,
 }
 
 fn get_default_data_path() -> PathBuf {
@@ -203,7 +203,7 @@ impl App {
             quit_pending: false,
             confirm_delete_project: false,
             deleted_projects: vec![],
-            todo_changed_this_session: false,
+            help_open: false,
         };
 
         let load_result = app.load_all_projects();
@@ -684,8 +684,7 @@ impl App {
                 self.all_projects.todo_list.push(TodoItem { text: task_name.clone(), completed: false, description: String::new() });
                 self.status_message = format!("Task '{}' added to todo list.", task_name);
                 self.is_dirty = true;
-                self.todo_changed_this_session = true;
-            }
+                            }
         }
     }
 
@@ -701,8 +700,7 @@ impl App {
                 }
                 self.status_message = format!("Item '{}' removed from todo list.", removed.text);
                 self.is_dirty = true;
-                self.todo_changed_this_session = true;
-            }
+                            }
         }
     }
 
@@ -713,8 +711,7 @@ impl App {
             self.todo_list_state.select(None);
             self.status_message = "Cleared all completed todo items.".to_string();
             self.is_dirty = true;
-            self.todo_changed_this_session = true;
-        } else {
+                    } else {
             self.status_message = "No completed items to clear.".to_string();
         }
     }
@@ -726,8 +723,7 @@ impl App {
                 self.all_projects.todo_list.swap(idx, idx - 1);
                 self.todo_list_state.select(Some(idx - 1));
                 self.is_dirty = true;
-                self.todo_changed_this_session = true;
-            }
+                            }
         }
     }
 
@@ -738,8 +734,7 @@ impl App {
                 self.all_projects.todo_list.swap(idx, idx + 1);
                 self.todo_list_state.select(Some(idx + 1));
                 self.is_dirty = true;
-                self.todo_changed_this_session = true;
-            }
+                            }
         }
     }
 
@@ -1035,9 +1030,6 @@ fn run_app(app: &mut App) -> io::Result<()> {
         terminal.draw(|f| ui(f, app))?;
         handle_events(app)?;
     }
-    if app.todo_changed_this_session {
-        app.push_todo_to_phone();
-    }
     Ok(())
 }
 
@@ -1068,6 +1060,15 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
              app.confirm_delete_project = false;
              app.status_message = "Delete cancelled.".to_string();
          }
+    }
+
+    // Handle help screen - only allow ? and Escape when help is open
+    if app.help_open {
+        match key.code {
+            KeyCode::Char('?') | KeyCode::Esc => app.help_open = false,
+            _ => {}
+        }
+        return;
     }
 
     if key.modifiers == KeyModifiers::CONTROL {
@@ -1101,6 +1102,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 app.should_quit = true;
             }
         },
+        KeyCode::Char('?') => app.help_open = true,
         KeyCode::Char('g') => go_to_top(app),
         KeyCode::Char('G') => go_to_bottom(app),
         KeyCode::Char('K') => {
@@ -1338,8 +1340,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                         app.input_mode = InputMode::Editing;
                         load_buffer_for_editing(app);
                     }
-                    app.todo_changed_this_session = true;
-                }
+                                    }
             }
         }
         _ => {}
@@ -1683,8 +1684,7 @@ fn save_buffer_to_task(app: &mut App) {
                 if idx < app.all_projects.todo_list.len() {
                     app.all_projects.todo_list[idx].description = input_buffer_owned;
                     app.is_dirty = true;
-                    app.todo_changed_this_session = true;
-                }
+                                    }
             }
         }
         FocusArea::NtfyTopic => {
@@ -1925,6 +1925,11 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 }
             }
         }
+    }
+
+    // Render help screen overlay last (on top of everything)
+    if app.help_open {
+        render_help_screen(frame);
     }
 }
 
@@ -2315,7 +2320,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.input_mode {
-        InputMode::Normal => "Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | C(lrTodo) | ^d/^u(Proj) | ^f(Push) | (t)oday | u/^r(Undo/Redo) | (M)ore | (T)odo | (Ctrl-s)ave | C/N/P(Proj) | ^n/^p(Mov) | (q)uit",
+        InputMode::Normal => "(?) Help | Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | (M)ore | (T)odo | (Ctrl-s)ave | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
     
@@ -2342,6 +2347,87 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(app.status_message.clone()).alignment(Alignment::Left), layout[0]);
     frame.render_widget(Paragraph::new(topic_display).style(topic_style).alignment(Alignment::Left), layout[1]);
     frame.render_widget(Paragraph::new(help_text).alignment(Alignment::Right).wrap(Wrap { trim: true }), layout[2]);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn render_help_screen(frame: &mut Frame) {
+    let area = centered_rect(60, 80, frame.area());
+    frame.render_widget(Clear, area);
+
+    let help_content = vec![
+        Line::from(Span::styled("NAVIGATION", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  j/k, Up/Down     Move up/down"),
+        Line::from("  h/l, Left/Right  Move left/right (fields)"),
+        Line::from("  Tab/Shift+Tab    Switch focus areas"),
+        Line::from("  g/G              Go to top/bottom"),
+        Line::from(""),
+        Line::from(Span::styled("TASK OPERATIONS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  a                Add sibling task"),
+        Line::from("  A                Add top-level task"),
+        Line::from("  s                Add subtask"),
+        Line::from("  D                Delete task"),
+        Line::from("  Enter            Edit selected field"),
+        Line::from("  > / <            Indent/unindent task"),
+        Line::from("  M                Toggle details view"),
+        Line::from("  K/J              Move task up/down"),
+        Line::from(""),
+        Line::from(Span::styled("TODO LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  T                Toggle todo list panel"),
+        Line::from("  + / -            Add/remove task from todo"),
+        Line::from("  Space            Toggle todo complete"),
+        Line::from("  Shift+C          Clear completed todos"),
+        Line::from(""),
+        Line::from(Span::styled("CALENDAR", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  H/L              Move calendar left/right"),
+        Line::from("  t                Jump to today"),
+        Line::from("  O                Toggle highlight mode"),
+        Line::from(""),
+        Line::from(Span::styled("PROJECT", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  N/P              Next/previous project"),
+        Line::from("  C                Create new project"),
+        Line::from("  Ctrl+d           Delete project (press twice)"),
+        Line::from("  Ctrl+u           Restore deleted project"),
+        Line::from("  Ctrl+n/Ctrl+p    Move project order"),
+        Line::from(""),
+        Line::from(Span::styled("GENERAL", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  Ctrl+s           Save all projects"),
+        Line::from("  u / Ctrl+r       Undo / Redo"),
+        Line::from("  Ctrl+f           Push todo to phone (ntfy)"),
+        Line::from("  q                Quit"),
+        Line::from(""),
+        Line::from(Span::styled("  Press ? or Esc to close", Style::default().fg(Color::Cyan))),
+    ];
+
+    let block = Block::default()
+        .title(" Help ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let paragraph = Paragraph::new(help_content)
+        .block(block)
+        .alignment(Alignment::Left);
+
+    frame.render_widget(paragraph, area);
 }
 
 // --- TERMINAL SETUP & RESTORATION ---
