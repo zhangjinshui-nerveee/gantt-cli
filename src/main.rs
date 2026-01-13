@@ -2131,21 +2131,28 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
             task.end_date.map_or(false, |end| app.today >= start && app.today <= end)
         });
 
-        let is_urgent = if let (Some(start), Some(end)) = (task.start_date, task.end_date) {
+        // Calculate urgency level: how far behind schedule (0.0 = on track, 1.0 = maximally behind)
+        let urgency_level: Option<f32> = if let (Some(start), Some(end)) = (task.start_date, task.end_date) {
             if app.today >= start && app.today <= end {
                 let days_from_start = (app.today - start).num_days() + 1; // Add 1 to include the start day
                 let total_duration = (end - start).num_days() + 1;
                 if total_duration > 0 {
-                    let expected_progress = (days_from_start as f32 / total_duration as f32 * 100.0) as u8;
-                    task.progress < expected_progress
+                    let expected_progress = days_from_start as f32 / total_duration as f32 * 100.0;
+                    let progress_gap = expected_progress - task.progress as f32;
+                    if progress_gap > 0.0 {
+                        // Normalize gap to 0.0-1.0 range (cap at 100% gap)
+                        Some((progress_gap / 100.0).min(1.0))
+                    } else {
+                        None // On track or ahead
+                    }
                 } else {
-                    false
+                    None
                 }
             } else {
-                false
+                None
             }
         } else {
-            false
+            None
         };
 
         let is_overdue = if let Some(end) = task.end_date {
@@ -2167,8 +2174,12 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
                 }
             }
             HighlightMode::Urgent => {
-                if is_urgent {
-                    Style::default().fg(Color::Rgb(255, 165, 0)) // Orange for urgent
+                if let Some(level) = urgency_level {
+                    // Color gradient based on urgency: yellow (slightly behind) -> deep orange (far behind)
+                    // level 0.0 = yellow (255, 220, 50), level 1.0 = deep orange (255, 80, 0)
+                    let green = (220.0 - 140.0 * level) as u8; // 220 -> 80
+                    let blue = (50.0 - 50.0 * level) as u8;    // 50 -> 0
+                    Style::default().fg(Color::Rgb(255, green, blue))
                 } else {
                     Style::default()
                 }
