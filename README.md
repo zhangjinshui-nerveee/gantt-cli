@@ -1,58 +1,99 @@
-# ganttit (gantt in terminal)
+# gantt-cli
 
-A terminal user interface (TUI) application for visualizing and managing Gantt charts directly from your command line. This tool aims to provide a lightweight yet powerful way to keep track of project timelines and task dependencies without leaving your terminal.
+A terminal user interface (TUI) application for visualizing and managing Gantt charts directly from your command line. Built with Rust using ratatui, this tool provides a lightweight yet powerful way to keep track of project timelines and task dependencies without leaving your terminal.
 
-![gantt_tui](https://github.com/user-attachments/assets/8da888dc-7225-4ffb-a8e2-e09bd414bb67)
+![gantt_cli](https://github.com/user-attachments/assets/8da888dc-7225-4ffb-a8e2-e09bd414bb67)
 
 ## Features
 
-*   **Interactive Gantt Chart Display**: View tasks and their durations in a clear, interactive timeline.
-*   **Task Management**: Add, edit, and delete tasks directly within the TUI.
-*   **Dependency Tracking**: Define and visualize dependencies between tasks.
-*   **Customizable Views**: Filter and sort tasks to focus on what matters most.
-*   **Keyboard-driven Interface**: Efficient navigation and interaction using only your keyboard.
+- **Interactive Gantt Chart Display**: View tasks and their durations in a clear, interactive timeline
+- **Hierarchical Tasks**: Create parent tasks with subtasks for better organization
+- **Dependency Tracking**: Define task dependencies with automatic schedule calculation using topological sort
+- **Multiple Projects**: Manage multiple projects with easy switching between them
+- **Todo List**: Built-in personal todo list with completion tracking
+- **Undo/Redo**: Full state history with undo (u) and redo (Ctrl+r) support
+- **Details View**: Expand tasks to view and edit detailed descriptions
+- **Urgent Task Highlighting**: Toggle urgent view mode with color intensity based on task urgency
+- **Push Notifications**: Send todo items to your phone via [ntfy.sh](https://ntfy.sh)
+- **Keyboard-driven Interface**: Efficient vim-style navigation and interaction
 
 ## Installation
 
-To build and run `gantt-tui`, you will need to have [Rust](https://www.rust-lang.org/tools/install) and Cargo installed on your system.
-
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/your-username/gantt-tui.git
-    cd gantt-tui
-    ```
-    (Note: Replace `https://github.com/your-username/gantt-tui.git` with the actual repository URL if it's hosted elsewhere.)
-
-2.  **Build the application**:
-    ```bash
-    cargo build --release
-    ```
-    This command compiles the application and places the executable in the `target/release/` directory.
-
-## Usage
-
-Once built, you can run the application from the project root:
+Download the binary for your platform from the [Releases](https://github.com/nickschu/gantt-cli/releases) page, make it executable, and run it.
 
 ```bash
-./target/release/gantt-tui
+chmod +x gantt-cli
+./gantt-cli
 ```
 
-Alternatively, if you have added `~/.cargo/bin` to your PATH, you can install it and run directly:
+## Keybindings
 
-```bash
-cargo install --path .
-gantt-tui
-```
+Press `?` in the application to see the full help screen.
 
-(Further usage instructions, including command-line arguments and keybindings, will be added here as the application develops.)
+### Navigation
+| Key | Action |
+|-----|--------|
+| `j/k` or `Up/Down` | Move up/down |
+| `h/l` or `Left/Right` | Move left/right (fields) |
+| `Tab/Shift+Tab` | Switch focus areas |
+| `g/G` | Go to top/bottom |
+
+### Task Operations
+| Key | Action |
+|-----|--------|
+| `a` | Add sibling task |
+| `A` | Add top-level task |
+| `s` | Add subtask |
+| `D` | Delete task |
+| `Enter` | Edit selected field |
+| `> / <` | Indent/unindent task |
+| `M` | Toggle details view |
+| `K/J` | Move task up/down |
+
+### Todo List
+| Key | Action |
+|-----|--------|
+| `T` | Toggle todo list panel |
+| `+ / -` | Add/remove task from todo |
+| `Space` | Toggle todo complete |
+| `Shift+C` | Clear completed todos |
+
+### Calendar
+| Key | Action |
+|-----|--------|
+| `H/L` | Move calendar left/right |
+| `t` | Jump to today |
+| `O` | Toggle highlight mode (today/urgent) |
+
+### Project Management
+| Key | Action |
+|-----|--------|
+| `N/P` | Next/previous project |
+| `C` | Create new project |
+| `Ctrl+d` | Delete project (press twice to confirm) |
+| `Ctrl+u` | Restore deleted project |
+| `Ctrl+n/Ctrl+p` | Move project order |
+
+### General
+| Key | Action |
+|-----|--------|
+| `Ctrl+s` | Save all projects |
+| `u / Ctrl+r` | Undo / Redo |
+| `Ctrl+f` | Push todo to phone (ntfy) |
+| `?` | Toggle help screen |
+| `q` | Quit |
+
+## Data Storage
+
+Project data is stored in `~/.config/gantt-cli/projects.json` by default.
 
 ## Roadmap
-- [ ] enable cloud backup and sync
-- [ ] enable collaboration
+- [ ] Enable cloud backup and sync
+- [ ] Enable collaboration
 
 ## Contributing
 
-Contributions are welcome! Please see the `CONTRIBUTING.md` file (to be created) for more details on how to contribute.
+Contributions are welcome! Feel free to open issues or submit pull requests.
 
 ## License
 
