@@ -154,6 +154,7 @@ struct App {
     confirm_delete_project: bool,
     deleted_projects: Vec<ProjectData>,
     help_open: bool,
+    editing_todo_name: bool,
 }
 
 fn get_default_data_path() -> PathBuf {
@@ -204,6 +205,7 @@ impl App {
             confirm_delete_project: false,
             deleted_projects: vec![],
             help_open: false,
+            editing_todo_name: false,
         };
 
         let load_result = app.load_all_projects();
@@ -1175,8 +1177,19 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('h') | KeyCode::Left => select_previous_field(app),
         KeyCode::Char('l') | KeyCode::Right => select_next_field(app),
         KeyCode::Char('a') => {
-            app.add_new_sibling_task();
-            load_buffer_for_editing(app);
+            if app.focus_area == FocusArea::TodoList {
+                app.save_state_for_undo();
+                app.all_projects.todo_list.push(TodoItem { text: String::new(), completed: false, description: String::new() });
+                let new_idx = app.all_projects.todo_list.len() - 1;
+                app.todo_list_state.select(Some(new_idx));
+                app.editing_todo_name = true;
+                app.input_mode = InputMode::Editing;
+                app.input_buffer.clear();
+                app.is_dirty = true;
+            } else {
+                app.add_new_sibling_task();
+                load_buffer_for_editing(app);
+            }
         },
         KeyCode::Char('>') => app.indent_task(),
         KeyCode::Char('<') => app.unindent_task(),
@@ -1361,20 +1374,20 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                         app.is_dirty = true;
                     }
                     if was_just_finished {
-                        if !todo_description.is_empty() {
-                            let mut target = None;
-                            if let Some(t_idx) = app.get_current_project().tasks.iter().position(|t| t.name == todo_text) {
-                                target = Some((app.current_project_index, t_idx));
-                            } else {
-                                for (p_idx, proj) in app.all_projects.projects.iter().enumerate() {
-                                    if let Some(t_idx) = proj.tasks.iter().position(|t| t.name == todo_text) {
-                                        target = Some((p_idx, t_idx));
-                                        break;
-                                    }
+                        let mut target = None;
+                        if let Some(t_idx) = app.get_current_project().tasks.iter().position(|t| t.name == todo_text) {
+                            target = Some((app.current_project_index, t_idx));
+                        } else {
+                            for (p_idx, proj) in app.all_projects.projects.iter().enumerate() {
+                                if let Some(t_idx) = proj.tasks.iter().position(|t| t.name == todo_text) {
+                                    target = Some((p_idx, t_idx));
+                                    break;
                                 }
                             }
+                        }
 
-                            if let Some((p_idx, t_idx)) = target {
+                        if let Some((p_idx, t_idx)) = target {
+                            if !todo_description.is_empty() {
                                 let task = &mut app.all_projects.projects[p_idx].tasks[t_idx];
                                 let mut details = task.details.clone().unwrap_or_default();
                                 if !details.is_empty() && !details.ends_with('\n') {
@@ -1383,13 +1396,14 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                                 details.push_str(&format!("{}: {}", app.today.format("%m/%d/%Y"), todo_description));
                                 task.details = Some(details);
                             }
+                            app.sync_project_with_todo_selection();
+                            app.focus_area = FocusArea::Tasks;
+                            app.selected_task_field = TaskField::Progress;
+                            app.input_mode = InputMode::Editing;
+                            load_buffer_for_editing(app);
+                        } else {
+                            app.status_message = format!("'{}' marked done.", todo_text);
                         }
-
-                        app.sync_project_with_todo_selection();
-                        app.focus_area = FocusArea::Tasks;
-                        app.selected_task_field = TaskField::Progress;
-                        app.input_mode = InputMode::Editing;
-                        load_buffer_for_editing(app);
                     }
                                     }
             }
@@ -1452,6 +1466,21 @@ fn handle_editing_mode(app: &mut App, key: KeyEvent) {
             app.recalculate_schedule();
         }
         KeyCode::Esc => {
+            if app.editing_todo_name {
+                // Remove the empty todo item that was being named
+                if let Some(idx) = app.todo_list_state.selected() {
+                    if idx < app.all_projects.todo_list.len() && app.all_projects.todo_list[idx].text.is_empty() {
+                        app.all_projects.todo_list.remove(idx);
+                        if app.all_projects.todo_list.is_empty() {
+                            app.todo_list_state.select(None);
+                        } else {
+                            app.todo_list_state.select(Some(idx.saturating_sub(1)));
+                        }
+                        app.is_dirty = true;
+                    }
+                }
+                app.editing_todo_name = false;
+            }
             app.input_mode = InputMode::Normal;
             app.input_buffer.clear();
         }
@@ -1606,7 +1635,11 @@ fn load_buffer_for_editing(app: &mut App) {
         FocusArea::TodoList => {
             if let Some(idx) = app.todo_list_state.selected() {
                 if idx < app.all_projects.todo_list.len() {
-                    app.input_buffer = app.all_projects.todo_list[idx].description.clone();
+                    if app.editing_todo_name {
+                        app.input_buffer = app.all_projects.todo_list[idx].text.clone();
+                    } else {
+                        app.input_buffer = app.all_projects.todo_list[idx].description.clone();
+                    }
                 }
             }
         }
@@ -1733,9 +1766,23 @@ fn save_buffer_to_task(app: &mut App) {
         FocusArea::TodoList => {
             if let Some(idx) = app.todo_list_state.selected() {
                 if idx < app.all_projects.todo_list.len() {
-                    app.all_projects.todo_list[idx].description = input_buffer_owned;
+                    if app.editing_todo_name {
+                        if input_buffer_owned.trim().is_empty() {
+                            app.all_projects.todo_list.remove(idx);
+                            if app.all_projects.todo_list.is_empty() {
+                                app.todo_list_state.select(None);
+                            } else {
+                                app.todo_list_state.select(Some(idx.saturating_sub(1)));
+                            }
+                        } else {
+                            app.all_projects.todo_list[idx].text = input_buffer_owned;
+                        }
+                        app.editing_todo_name = false;
+                    } else {
+                        app.all_projects.todo_list[idx].description = input_buffer_owned;
+                    }
                     app.is_dirty = true;
-                                    }
+                }
             }
         }
         FocusArea::NtfyTopic => {
@@ -1987,7 +2034,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
 fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Todo List (Space: Toggle, Enter: Edit Desc)")
+        .title("Todo List (a: Add, Space: Toggle, Enter: Edit Desc, -: Remove)")
         .border_style(if app.focus_area == FocusArea::TodoList {
             Style::default().fg(Color::Yellow)
         } else {
@@ -2011,30 +2058,41 @@ fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
                 Style::default().fg(Color::DarkGray)
             };
 
-            let main_text = Line::from(format!("• {}", item.text)).style(style);
-            
-            let is_editing = app.focus_area == FocusArea::TodoList 
-                             && app.input_mode == InputMode::Editing 
+            let is_editing = app.focus_area == FocusArea::TodoList
+                             && app.input_mode == InputMode::Editing
                              && app.todo_list_state.selected() == Some(i);
+            let is_editing_name = is_editing && app.editing_todo_name;
 
-            let desc_content = if is_editing {
+            let name_display = if is_editing_name {
+                format!("• {}_", app.input_buffer)
+            } else {
+                format!("• {}", item.text)
+            };
+            let name_style = if is_editing_name {
+                style.fg(Color::Cyan)
+            } else {
+                style
+            };
+            let main_text = Line::from(name_display).style(name_style);
+
+            let desc_content = if is_editing && !is_editing_name {
                 format!("  > {}", app.input_buffer)
             } else {
                 format!("  {}", item.description)
             };
-            
+
             let desc_style = if item.completed {
                 Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
-            } else if is_editing {
+            } else if is_editing && !is_editing_name {
                 Style::default().fg(Color::Cyan)
             } else {
                 Style::default().fg(Color::Indexed(247))
             };
 
             let desc_line = Line::from(desc_content).style(desc_style);
-            
+
             let mut lines = vec![main_text];
-            if !item.description.is_empty() || is_editing {
+            if !item.description.is_empty() || (is_editing && !is_editing_name) {
                 lines.push(desc_line);
             }
             
