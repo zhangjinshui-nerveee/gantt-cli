@@ -62,6 +62,24 @@ enum TodoItemInput {
     Struct(TodoItem),
 }
 
+fn default_true() -> bool { true }
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ColumnVisibility {
+    #[serde(default = "default_true")] assigned_to: bool,
+    #[serde(default = "default_true")] start_date: bool,
+    #[serde(default = "default_true")] end_date: bool,
+    #[serde(default = "default_true")] duration: bool,
+    #[serde(default = "default_true")] progress: bool,
+    #[serde(default = "default_true")] dependencies: bool,
+}
+
+impl Default for ColumnVisibility {
+    fn default() -> Self {
+        ColumnVisibility { assigned_to: true, start_date: true, end_date: true, duration: true, progress: true, dependencies: true }
+    }
+}
+
 fn deserialize_todo_list<'de, D>(deserializer: D) -> Result<Vec<TodoItem>, D::Error>
 where
     D: Deserializer<'de>,
@@ -83,6 +101,8 @@ struct AllProjectsData {
     ntfy_topic: Option<String>,
     #[serde(default)]
     compact_timeline: bool,
+    #[serde(default)]
+    column_visibility: ColumnVisibility,
 }
 
 #[derive(Clone)]
@@ -103,6 +123,7 @@ enum TaskField {
     Name,
     AssignedTo,
     StartDate,
+    EndDate,
     Duration,
     Progress,
     Dependencies,
@@ -157,6 +178,8 @@ struct App {
     deleted_projects: Vec<ProjectData>,
     help_open: bool,
     editing_todo_name: bool,
+    column_config_open: bool,
+    column_config_selected: usize,
 }
 
 fn get_default_data_path() -> PathBuf {
@@ -183,6 +206,7 @@ impl App {
                 todo_list: vec![],
                 ntfy_topic: None,
                 compact_timeline: false,
+                column_visibility: ColumnVisibility::default(),
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
@@ -209,6 +233,8 @@ impl App {
             deleted_projects: vec![],
             help_open: false,
             editing_todo_name: false,
+            column_config_open: false,
+            column_config_selected: 0,
         };
 
         let load_result = app.load_all_projects();
@@ -1118,6 +1144,34 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
          }
     }
 
+    // Handle column config popup
+    if app.column_config_open {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if app.column_config_selected < 5 { app.column_config_selected += 1; }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if app.column_config_selected > 0 { app.column_config_selected -= 1; }
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                let vis = &mut app.all_projects.column_visibility;
+                match app.column_config_selected {
+                    0 => vis.assigned_to = !vis.assigned_to,
+                    1 => vis.start_date = !vis.start_date,
+                    2 => vis.end_date = !vis.end_date,
+                    3 => vis.duration = !vis.duration,
+                    4 => vis.progress = !vis.progress,
+                    5 => vis.dependencies = !vis.dependencies,
+                    _ => {}
+                }
+                app.is_dirty = true;
+            }
+            KeyCode::Esc | KeyCode::Char('\\') => app.column_config_open = false,
+            _ => {}
+        }
+        return;
+    }
+
     // Handle help screen - only allow ? and Escape when help is open
     if app.help_open {
         match key.code {
@@ -1159,6 +1213,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             }
         },
         KeyCode::Char('?') => app.help_open = true,
+        KeyCode::Char('\\') => app.column_config_open = true,
         KeyCode::Char('g') => go_to_top(app),
         KeyCode::Char('G') => go_to_bottom(app),
         KeyCode::Char('K') => {
@@ -1348,14 +1403,21 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     if let Some(selected_index) = app.table_state.selected() {
                         let current_project = app.get_current_project();
                         let is_editable = match app.selected_task_field {
-                            TaskField::StartDate => current_project.tasks[selected_index].dependencies.is_empty(),
+                            TaskField::StartDate => {
+                                let task = &current_project.tasks[selected_index];
+                                task.dependencies.is_empty() || task.dependencies.iter().all(|dep_id| {
+                                    current_project.tasks.iter()
+                                        .find(|t| t.id == *dep_id)
+                                        .map_or(false, |t| t.progress == 100)
+                                })
+                            }
                             _ => true,
                         };
                         if is_editable {
                             app.input_mode = InputMode::Editing;
                             load_buffer_for_editing(app);
                         } else {
-                            app.status_message = "Cannot edit Start Date when Dependencies are set.".to_string();
+                            app.status_message = "Cannot edit Start Date: dependencies are not all finished.".to_string();
                         }
                     }
                 }
@@ -1405,7 +1467,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                                 if !details.is_empty() && !details.ends_with('\n') {
                                     details.push('\n');
                                 }
-                                details.push_str(&format!("{}: {}", app.today.format("%m/%d/%Y"), todo_description));
+                                details.push_str(&format!("{}: {}", app.today.format("%m/%d/%y"), todo_description));
                                 task.details = Some(details);
                             }
                             app.sync_project_with_todo_selection();
@@ -1573,31 +1635,49 @@ fn navigate_down(app: &mut App) {
     }
 }
 
+fn task_field_visible(app: &App, field: TaskField) -> bool {
+    let vis = &app.all_projects.column_visibility;
+    match field {
+        TaskField::Name => true,
+        TaskField::AssignedTo => vis.assigned_to,
+        TaskField::StartDate => vis.start_date,
+        TaskField::EndDate => vis.end_date,
+        TaskField::Duration => vis.duration,
+        TaskField::Progress => vis.progress,
+        TaskField::Dependencies => vis.dependencies,
+    }
+}
+
 fn select_next_field(app: &mut App) {
     if let FocusArea::Tasks = app.focus_area {
-        app.selected_task_field = match app.selected_task_field {
-            TaskField::Name => TaskField::AssignedTo,
-            TaskField::AssignedTo => TaskField::StartDate,
-            TaskField::StartDate => TaskField::Duration,
-            TaskField::Duration => TaskField::Progress,
-            TaskField::Progress => TaskField::Dependencies,
-            TaskField::Dependencies => TaskField::Name,
-        };
+        const FIELDS: [TaskField; 7] = [
+            TaskField::Name, TaskField::AssignedTo, TaskField::StartDate,
+            TaskField::EndDate, TaskField::Duration, TaskField::Progress, TaskField::Dependencies,
+        ];
+        let cur = FIELDS.iter().position(|&f| f == app.selected_task_field).unwrap_or(0);
+        let mut next = (cur + 1) % FIELDS.len();
+        while next != cur && !task_field_visible(app, FIELDS[next]) {
+            next = (next + 1) % FIELDS.len();
+        }
+        app.selected_task_field = FIELDS[next];
     }
 }
 
 fn select_previous_field(app: &mut App) {
     if let FocusArea::Tasks = app.focus_area {
-        app.selected_task_field = match app.selected_task_field {
-            TaskField::Name => TaskField::Dependencies,
-            TaskField::AssignedTo => TaskField::Name,
-            TaskField::StartDate => TaskField::AssignedTo,
-            TaskField::Duration => TaskField::StartDate,
-            TaskField::Progress => TaskField::Duration,
-            TaskField::Dependencies => TaskField::Progress,
-        };
+        const FIELDS: [TaskField; 7] = [
+            TaskField::Name, TaskField::AssignedTo, TaskField::StartDate,
+            TaskField::EndDate, TaskField::Duration, TaskField::Progress, TaskField::Dependencies,
+        ];
+        let cur = FIELDS.iter().position(|&f| f == app.selected_task_field).unwrap_or(0);
+        let mut prev = (cur + FIELDS.len() - 1) % FIELDS.len();
+        while prev != cur && !task_field_visible(app, FIELDS[prev]) {
+            prev = (prev + FIELDS.len() - 1) % FIELDS.len();
+        }
+        app.selected_task_field = FIELDS[prev];
     }
 }
+
 
 fn go_to_top(app: &mut App) {
     if !app.get_current_project().tasks.is_empty() {
@@ -1618,8 +1698,8 @@ fn load_buffer_for_editing(app: &mut App) {
     let current_project = app.get_current_project();
     match app.focus_area {
         FocusArea::Project(ProjectField::Name) => app.input_buffer = current_project.project_name.clone(),
-        FocusArea::Project(ProjectField::StartDate) => app.input_buffer = current_project.project_start_date.format("%m/%d/%Y").to_string(),
-        FocusArea::Project(ProjectField::EndDate) => app.input_buffer = current_project.project_end_date.map_or_else(|| "".to_string(), |d| d.format("%m/%d/%Y").to_string()),
+        FocusArea::Project(ProjectField::StartDate) => app.input_buffer = current_project.project_start_date.format("%m/%d/%y").to_string(),
+        FocusArea::Project(ProjectField::EndDate) => app.input_buffer = current_project.project_end_date.map_or_else(|| "".to_string(), |d| d.format("%m/%d/%y").to_string()),
         FocusArea::Project(ProjectField::DayOffset) => app.input_buffer = current_project.day_offset.to_string(),
         FocusArea::Tasks => {
             if let Some(index) = app.table_state.selected() {
@@ -1636,7 +1716,8 @@ fn load_buffer_for_editing(app: &mut App) {
                             .collect::<Vec<_>>()
                             .join(", ")
                     },
-                    TaskField::StartDate => task.manual_start_date.map_or("".to_string(), |d| d.format("%m/%d/%Y").to_string()),
+                    TaskField::EndDate => task.end_date.map_or("".to_string(), |d| d.format("%m/%d/%y").to_string()),
+                    TaskField::StartDate => task.manual_start_date.map_or("".to_string(), |d| d.format("%m/%d/%y").to_string()),
                 };
             }
         }
@@ -1672,7 +1753,7 @@ fn save_buffer_to_task(app: &mut App) {
                     if input_buffer_owned.to_lowercase() == "today" {
                         current_project.project_start_date = Local::now().date_naive();
                     }
-                    else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
+                    else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%y") {
                         current_project.project_start_date = date;
                     } else {
                         app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
@@ -1683,7 +1764,7 @@ fn save_buffer_to_task(app: &mut App) {
                         current_project.project_end_date = None;
                     } else if input_buffer_owned.to_lowercase() == "today" {
                         current_project.project_end_date = Some(Local::now().date_naive());
-                    } else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
+                    } else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%y") {
                         current_project.project_end_date = Some(date);
                     } else {
                         app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
@@ -1725,6 +1806,28 @@ fn save_buffer_to_task(app: &mut App) {
                     if !task.dependencies.is_empty() {
                         task.manual_start_date = None;
                     }
+                } else if selected_task_field == TaskField::EndDate {
+                    let start_date = app.get_current_project().tasks[index].start_date;
+                    let new_end = if input_buffer_owned.to_lowercase() == "today" {
+                        Some(Local::now().date_naive())
+                    } else if let Ok(d) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%y") {
+                        Some(d)
+                    } else {
+                        app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
+                        None
+                    };
+                    if let Some(end) = new_end {
+                        if let Some(start) = start_date {
+                            let new_duration = (end - start).num_days() + 1;
+                            if new_duration >= 1 {
+                                app.get_current_project_mut().tasks[index].duration = new_duration;
+                            } else {
+                                app.status_message = "End date must be on or after start date.".to_string();
+                            }
+                        } else {
+                            app.status_message = "Cannot set end date: task has no start date yet.".to_string();
+                        }
+                    }
                 } else {
                     let task = &mut app.get_current_project_mut().tasks[index];
                     match selected_task_field {
@@ -1754,19 +1857,34 @@ fn save_buffer_to_task(app: &mut App) {
                         TaskField::StartDate => {
                             if input_buffer_owned.is_empty() {
                                 task.manual_start_date = None;
-                            } else if input_buffer_owned.to_lowercase() == "today" {
-                                task.manual_start_date = Some(Local::now().date_naive());
-                                task.dependencies.clear();
-                                app.status_message = "Dependencies cleared for task with manual start date.".to_string();
-                            } else if let Ok(date) = NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%Y") {
-                                task.manual_start_date = Some(date);
-                                task.dependencies.clear();
-                                app.status_message = "Dependencies cleared for task with manual start date.".to_string();
                             } else {
-                                app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
+                                let new_start = if input_buffer_owned.to_lowercase() == "today" {
+                                    Some(Local::now().date_naive())
+                                } else {
+                                    NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%y").ok()
+                                };
+                                if let Some(new_start) = new_start {
+                                    let end_date = task.end_date;
+                                    let new_duration = end_date.map(|end| (end - new_start).num_days() + 1);
+                                    if new_duration.map_or(false, |d| d < 1) {
+                                        app.status_message = "Start date must be before end date.".to_string();
+                                    } else {
+                                        if let Some(d) = new_duration {
+                                            task.duration = d;
+                                        }
+                                        task.manual_start_date = Some(new_start);
+                                        let had_deps = !task.dependencies.is_empty();
+                                        task.dependencies.clear();
+                                        if had_deps {
+                                            app.status_message = "Dependencies cleared for task with manual start date.".to_string();
+                                        }
+                                    }
+                                } else {
+                                    app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
+                                }
                             }
                         }
-                        _ => {} // Dependencies case is handled above
+                        _ => {} // Dependencies and EndDate cases are handled above
                     }
                 }
             }
@@ -1801,7 +1919,7 @@ fn save_buffer_to_task(app: &mut App) {
 }
 
 // --- UI RENDERING ---
-fn calculate_column_widths(app: &App) -> [u16; 7] {
+fn calculate_column_widths(app: &App) -> [u16; 8] {
     const PADDING: u16 = 2;
     let current_project = app.get_current_project();
     let display_ids = app.generate_task_display_ids(); // Generate IDs here too
@@ -1817,28 +1935,35 @@ fn calculate_column_widths(app: &App) -> [u16; 7] {
         .map(|t| UnicodeWidthStr::width(t.name.as_str()))
         .max().unwrap_or(0).max(UnicodeWidthStr::width("Name")) as u16 + 12 + PADDING;
 
-    let assigned_col_width = current_project.tasks.iter()
-        .map(|t| UnicodeWidthStr::width(t.assigned_to.as_str()))
-        .max().unwrap_or(0).max(UnicodeWidthStr::width("Assigned")) as u16 + PADDING;
+    let vis = &app.all_projects.column_visibility;
 
-    let start_col_width = UnicodeWidthStr::width("mm/dd/yyyy") as u16 + PADDING;
-    let dur_col_width = UnicodeWidthStr::width("Dur").max(4) as u16 + PADDING;
-    let prog_col_width = UnicodeWidthStr::width("Prog%").max(4) as u16 + PADDING;
-    
-    let deps_col_width = current_project.tasks.iter()
-        .map(|t| {
-            if t.dependencies.is_empty() { 0 }
-            else {
-                t.dependencies.iter().map(|d| {
-                    let display_id = display_ids.get(d).cloned().unwrap_or_else(|| "?".to_string());
-                    UnicodeWidthStr::width(display_id.as_str())
-                }).sum::<usize>() 
-                + (t.dependencies.len() - 1) * 2
-            }
-        })
-        .max().unwrap_or(0).max(UnicodeWidthStr::width("Deps")) as u16 + PADDING;
+    let assigned_col_width = if vis.assigned_to {
+        current_project.tasks.iter()
+            .map(|t| UnicodeWidthStr::width(t.assigned_to.as_str()))
+            .max().unwrap_or(0).max(UnicodeWidthStr::width("Assigned")) as u16 + PADDING
+    } else { 0 };
 
-    [id_col_width, name_col_width, assigned_col_width, start_col_width, dur_col_width, prog_col_width, deps_col_width]
+    let start_col_width = if vis.start_date { UnicodeWidthStr::width("mm/dd/yyyy") as u16 + PADDING } else { 0 };
+    let end_col_width = if vis.end_date { UnicodeWidthStr::width("mm/dd/yyyy") as u16 + PADDING } else { 0 };
+    let dur_col_width = if vis.duration { UnicodeWidthStr::width("Dur").max(4) as u16 + PADDING } else { 0 };
+    let prog_col_width = if vis.progress { UnicodeWidthStr::width("Prog%").max(4) as u16 + PADDING } else { 0 };
+
+    let deps_col_width = if vis.dependencies {
+        current_project.tasks.iter()
+            .map(|t| {
+                if t.dependencies.is_empty() { 0 }
+                else {
+                    t.dependencies.iter().map(|d| {
+                        let display_id = display_ids.get(d).cloned().unwrap_or_else(|| "?".to_string());
+                        UnicodeWidthStr::width(display_id.as_str())
+                    }).sum::<usize>()
+                    + (t.dependencies.len() - 1) * 2
+                }
+            })
+            .max().unwrap_or(0).max(UnicodeWidthStr::width("Deps")) as u16 + PADDING
+    } else { 0 };
+
+    [id_col_width, name_col_width, assigned_col_width, start_col_width, end_col_width, dur_col_width, prog_col_width, deps_col_width]
 }
 
 
@@ -1949,7 +2074,15 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         let col_constraints: Vec<Constraint> = column_widths.iter().map(|w| Constraint::Length(*w)).collect();
                         let col_layout = Layout::default().direction(Direction::Horizontal).constraints(col_constraints).split(tasks_area);
 
-                        let selected_col_index = app.selected_task_field as usize + 1;
+                        let selected_col_index = match app.selected_task_field {
+                            TaskField::Name => 1,
+                            TaskField::AssignedTo => 2,
+                            TaskField::StartDate => 3,
+                            TaskField::EndDate => 4,
+                            TaskField::Duration => 5,
+                            TaskField::Progress => 6,
+                            TaskField::Dependencies => 7,
+                        };
                         let selected_col_rect = col_layout[selected_col_index];
 
                         let indent_len = if app.selected_task_field == TaskField::Name {
@@ -1963,8 +2096,18 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         // The content being rendered in an active cell is `> ` + indent + buffer
                         let prefix_len = "> ".len() as u16;
                         
-                        // Restore original spacing logic (1x)
-                        let spacing_offset = selected_col_index as u16;
+                        // spacing_offset must stay consistent with pre-End-Date indices;
+                        // End Date (display-only, col 4) shifts the index of later fields
+                        // by 1 but should not affect the spacing calculation.
+                        let spacing_offset = match app.selected_task_field {
+                            TaskField::Name => 1u16,
+                            TaskField::AssignedTo => 2,
+                            TaskField::StartDate => 3,
+                            TaskField::EndDate => 4,
+                            TaskField::Duration => 5,
+                            TaskField::Progress => 6,
+                            TaskField::Dependencies => 7,
+                        };
 
                         // Per-column adjustment based on user feedback:
                         // Name (idx 1): 0
@@ -2007,6 +2150,11 @@ fn ui(frame: &mut Frame, app: &mut App) {
     // Render todo list popup overlay
     if app.todo_list_open {
         render_todo_list(frame, app);
+    }
+
+    // Render column config popup overlay
+    if app.column_config_open {
+        render_column_config(frame, app);
     }
 
     // Render help screen overlay last (on top of everything)
@@ -2091,7 +2239,7 @@ fn render_todo_list(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(list, area, &mut app.todo_list_state);
 }
 
-fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[u16; 7]) {
+fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[u16; 8]) {
     let current_project = app.get_current_project();
     let block = Block::default().borders(Borders::ALL).title(format!("Project Details & Tasks - {}", current_project.project_name));
     let inner_area = block.inner(area);
@@ -2114,12 +2262,12 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
     let day_offset_style = if app.focus_area == FocusArea::Project(ProjectField::DayOffset) { Style::default().bg(Color::Blue) } else { Style::default() };
     
     let name_text = if app.focus_area == FocusArea::Project(ProjectField::Name) && app.input_mode == InputMode::Editing { &app.input_buffer } else { &current_project.project_name };
-    let start_date_text = if app.focus_area == FocusArea::Project(ProjectField::StartDate) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.project_start_date.format("%m/%d/%Y").to_string() };
+    let start_date_text = if app.focus_area == FocusArea::Project(ProjectField::StartDate) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.project_start_date.format("%m/%d/%y").to_string() };
     
     let end_date_text = if app.focus_area == FocusArea::Project(ProjectField::EndDate) && app.input_mode == InputMode::Editing {
         app.input_buffer.clone()
     } else {
-        current_project.project_end_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%Y").to_string())
+        current_project.project_end_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%y").to_string())
     };
 
     let day_offset_text = if app.focus_area == FocusArea::Project(ProjectField::DayOffset) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.day_offset.to_string() };
@@ -2143,9 +2291,10 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
         Constraint::Length(column_widths[4]),
         Constraint::Length(column_widths[5]),
         Constraint::Length(column_widths[6]),
+        Constraint::Length(column_widths[7]),
     ];
 
-    let header_cells = ["ID", "Name", "Assigned", "Start", "Dur", "Prog%", "Deps"]
+    let header_cells = ["ID", "Name", "Assigned", "Start", "End", "Dur", "Prog%", "Deps"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
     let header_row = Row::new(header_cells).style(Style::default().bg(Color::LightBlue)).height(1);
@@ -2248,7 +2397,8 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
         let cells_data = vec![
             (TaskField::Name, name_display),
             (TaskField::AssignedTo, task.assigned_to.clone()),
-            (TaskField::StartDate, task.start_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%Y").to_string())),
+            (TaskField::StartDate, task.start_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%y").to_string())),
+            (TaskField::EndDate, task.end_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%y").to_string())),
             (TaskField::Duration, task.duration.to_string()),
             (TaskField::Progress, task.progress.to_string()),
             (TaskField::Dependencies, deps_str),
@@ -2505,6 +2655,44 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+fn render_column_config(frame: &mut Frame, app: &App) {
+    let area = centered_rect(35, 45, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Column Visibility ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let columns = [
+        ("Assigned To",  app.all_projects.column_visibility.assigned_to),
+        ("Start Date",   app.all_projects.column_visibility.start_date),
+        ("End Date",     app.all_projects.column_visibility.end_date),
+        ("Duration",     app.all_projects.column_visibility.duration),
+        ("Progress %",   app.all_projects.column_visibility.progress),
+        ("Dependencies", app.all_projects.column_visibility.dependencies),
+    ];
+
+    let mut content = vec![Line::from("")];
+    for (i, (name, visible)) in columns.iter().enumerate() {
+        let checkbox = if *visible { "[x]" } else { "[ ]" };
+        let style = if i == app.column_config_selected {
+            Style::default().bg(Color::Blue).fg(Color::White)
+        } else {
+            Style::default()
+        };
+        content.push(Line::from(format!("  {} {}", checkbox, name)).style(style));
+    }
+    content.push(Line::from(""));
+    content.push(Line::from(Span::styled(
+        "  j/k: move  Space: toggle  Esc/\\: close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    frame.render_widget(Paragraph::new(content).block(block), area);
+}
+
 fn render_help_screen(frame: &mut Frame) {
     let area = centered_rect(60, 80, frame.area());
     frame.render_widget(Clear, area);
@@ -2546,6 +2734,7 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from("  Ctrl+n/Ctrl+p    Move project order"),
         Line::from(""),
         Line::from(Span::styled("GENERAL", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from("  \\                Column visibility config"),
         Line::from("  Ctrl+s           Save all projects"),
         Line::from("  u / Ctrl+r       Undo / Redo"),
         Line::from("  Ctrl+f           Push todo to phone (ntfy)"),
