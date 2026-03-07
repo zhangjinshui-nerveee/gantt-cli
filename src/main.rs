@@ -1,6 +1,6 @@
 use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags, KeyboardEnhancementFlags},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -155,6 +155,7 @@ struct App {
     deleted_projects: Vec<ProjectData>,
     help_open: bool,
     editing_todo_name: bool,
+    compact_timeline: bool,
 }
 
 fn get_default_data_path() -> PathBuf {
@@ -206,6 +207,7 @@ impl App {
             deleted_projects: vec![],
             help_open: false,
             editing_todo_name: false,
+            compact_timeline: false,
         };
 
         let load_result = app.load_all_projects();
@@ -1326,6 +1328,14 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 HighlightMode::Urgent => HighlightMode::Today,
             };
         },
+        KeyCode::Char('Z') => {
+            app.compact_timeline = !app.compact_timeline;
+            app.status_message = if app.compact_timeline {
+                "Compact timeline (1 char/day). Press Z to switch back.".to_string()
+            } else {
+                "Normal timeline (3 chars/day). Press Z to switch back.".to_string()
+            };
+        },
         KeyCode::Enter => {
             match app.focus_area {
                 FocusArea::Project(_) => {
@@ -2334,13 +2344,15 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     let current_project = app.get_current_project();
     let min_date = current_project.project_start_date + Duration::days(current_project.day_offset);
     
-    const DAY_WIDTH: u16 = 3;
-    let date_range_days = (app.gantt_area_width / DAY_WIDTH) as i64;
+    let day_width: u16 = if app.compact_timeline { 1 } else { 3 };
+    let date_range_days = (app.gantt_area_width / day_width) as i64;
 
     let mut month_spans = vec![];
     let mut day_spans = vec![];
     let mut weekday_spans = vec![];
     let mut last_month = 0;
+    let mut compact_month_abbr = String::new();
+    let mut compact_month_char_idx = 0usize;
 
     for day in 0..=date_range_days {
         let current_date = min_date + Duration::days(day);
@@ -2364,14 +2376,30 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
             Weekday::Sun => "S",
         };
 
-        day_spans.push(Span::styled(format!("{:>2} ", current_date.day()), day_style));
-        weekday_spans.push(Span::styled(format!("{:>2} ", weekday_char), day_style));
+        if app.compact_timeline {
+            // Row 0 (month): spread "Jan"/"Feb"/... across first 3 days of each month
+            if current_date.month() != last_month {
+                last_month = current_date.month();
+                compact_month_abbr = current_date.format("%b").to_string();
+                compact_month_char_idx = 0;
+            }
+            let month_ch = compact_month_abbr.chars().nth(compact_month_char_idx).map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+            compact_month_char_idx += 1;
+            month_spans.push(Span::styled(month_ch, Style::default()));
 
-        if current_date.month() != last_month {
-            last_month = current_date.month();
-            month_spans.push(Span::styled(format!("{:<3}", current_date.format("%b")), Style::default()));
+            // Row 1 (day): weekday initial
+            day_spans.push(Span::styled(weekday_char, day_style));
+
+            weekday_spans.push(Span::raw(" "));
         } else {
-            month_spans.push(Span::raw(" ".repeat(DAY_WIDTH as usize)));
+            day_spans.push(Span::styled(format!("{:>2} ", current_date.day()), day_style));
+            weekday_spans.push(Span::styled(format!("{:>2} ", weekday_char), day_style));
+            if current_date.month() != last_month {
+                last_month = current_date.month();
+                month_spans.push(Span::styled(format!("{:<3}", current_date.format("%b")), Style::default()));
+            } else {
+                month_spans.push(Span::raw("   "));
+            }
         }
     }
     
@@ -2404,7 +2432,22 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                 let is_deadline_day = app.get_current_project().project_end_date == Some(current_date);
                 let is_task_day = current_date >= start && current_date <= end;
                 
-                let content = if is_task_day {
+                let content = if app.compact_timeline {
+                    if is_task_day {
+                        if is_parent {
+                            if current_date == start { "[" }
+                            else if current_date == end { "]" }
+                            else { "=" }
+                        } else {
+                            let is_progress_day = current_date <= progress_end;
+                            if is_today { "|" }
+                            else if is_progress_day { "░" }
+                            else { "█" }
+                        }
+                    } else {
+                        if is_today { "|" } else { " " }
+                    }
+                } else if is_task_day {
                     if is_parent {
                         if current_date == start {
                             "[=="
@@ -2416,13 +2459,13 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                     } else {
                         let is_progress_day = current_date <= progress_end;
                         if is_today {
-                            if is_progress_day { "|░░" } else { "|██" } // Today marker + 2 progress filled/empty
+                            if is_progress_day { "|░░" } else { "|██" }
                         } else {
-                            if is_progress_day { "░░░" } else { "███" } // 3 progress filled/empty
+                            if is_progress_day { "░░░" } else { "███" }
                         }
                     }
                 } else {
-                    if is_today { "|  " } else { "   " } // Today marker + 2 spaces / 3 spaces
+                    if is_today { "|  " } else { "   " }
                 };
 
                 let mut style = if is_today { row_style.fg(Color::Cyan) } else { row_style };
@@ -2520,6 +2563,7 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from("  H/L              Move calendar left/right"),
         Line::from("  t                Jump to today"),
         Line::from("  O                Toggle highlight mode"),
+        Line::from("  Z                Toggle compact timeline (1 char/day)"),
         Line::from(""),
         Line::from(Span::styled("PROJECT", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  N/P              Next/previous project"),
@@ -2555,9 +2599,6 @@ fn setup_terminal() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = stdout();
     stdout.execute(EnterAlternateScreen)?;
-    let _ = stdout.execute(PushKeyboardEnhancementFlags(
-        KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-    ));
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
         let _ = restore_terminal();
@@ -2567,9 +2608,8 @@ fn setup_terminal() -> io::Result<()> {
 }
 
 fn restore_terminal() -> io::Result<()> {
-    disable_raw_mode()?;
     let mut stdout = stdout();
-    let _ = stdout.execute(PopKeyboardEnhancementFlags);
     stdout.execute(LeaveAlternateScreen)?;
+    disable_raw_mode()?;
     Ok(())
 }
