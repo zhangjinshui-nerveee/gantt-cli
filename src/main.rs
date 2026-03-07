@@ -81,6 +81,8 @@ struct AllProjectsData {
     todo_list: Vec<TodoItem>,
     #[serde(default)]
     ntfy_topic: Option<String>,
+    #[serde(default)]
+    compact_timeline: bool,
 }
 
 #[derive(Clone)]
@@ -155,7 +157,6 @@ struct App {
     deleted_projects: Vec<ProjectData>,
     help_open: bool,
     editing_todo_name: bool,
-    compact_timeline: bool,
 }
 
 fn get_default_data_path() -> PathBuf {
@@ -181,6 +182,7 @@ impl App {
                 active_project_index: 0,
                 todo_list: vec![],
                 ntfy_topic: None,
+                compact_timeline: false,
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
@@ -207,7 +209,6 @@ impl App {
             deleted_projects: vec![],
             help_open: false,
             editing_todo_name: false,
-            compact_timeline: false,
         };
 
         let load_result = app.load_all_projects();
@@ -1074,9 +1075,9 @@ impl App {
 fn main() -> io::Result<()> {
     setup_terminal()?;
     let mut app = App::new();
-    run_app(&mut app)?;
+    let result = run_app(&mut app);
     restore_terminal()?;
-    Ok(())
+    result
 }
 
 fn run_app(app: &mut App) -> io::Result<()> {
@@ -1329,8 +1330,9 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             };
         },
         KeyCode::Char('Z') => {
-            app.compact_timeline = !app.compact_timeline;
-            app.status_message = if app.compact_timeline {
+            app.all_projects.compact_timeline = !app.all_projects.compact_timeline;
+            app.is_dirty = true;
+            app.status_message = if app.all_projects.compact_timeline {
                 "Compact timeline (1 char/day). Press Z to switch back.".to_string()
             } else {
                 "Normal timeline (3 chars/day). Press Z to switch back.".to_string()
@@ -2315,7 +2317,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     let current_project = app.get_current_project();
     let min_date = current_project.project_start_date + Duration::days(current_project.day_offset);
     
-    let day_width: u16 = if app.compact_timeline { 1 } else { 3 };
+    let day_width: u16 = if app.all_projects.compact_timeline { 1 } else { 3 };
     let date_range_days = (app.gantt_area_width / day_width) as i64;
 
     let mut month_spans = vec![];
@@ -2347,7 +2349,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
             Weekday::Sun => "S",
         };
 
-        if app.compact_timeline {
+        if app.all_projects.compact_timeline {
             // Row 0 (month): spread "Jan"/"Feb"/... across first 3 days of each month
             if current_date.month() != last_month {
                 last_month = current_date.month();
@@ -2403,7 +2405,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                 let is_deadline_day = app.get_current_project().project_end_date == Some(current_date);
                 let is_task_day = current_date >= start && current_date <= end;
                 
-                let content = if app.compact_timeline {
+                let content = if app.all_projects.compact_timeline {
                     if is_task_day {
                         if is_parent {
                             if current_date == start { "[" }
