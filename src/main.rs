@@ -1564,11 +1564,7 @@ fn navigate_down(app: &mut App) {
                 if selected < app.all_projects.todo_list.len() - 1 {
                     app.todo_list_state.select(Some(selected + 1));
                     app.sync_project_with_todo_selection();
-                } else {
-                    app.focus_area = FocusArea::NtfyTopic;
                 }
-            } else {
-                app.focus_area = FocusArea::NtfyTopic;
             }
         }
         FocusArea::NtfyTopic => {}
@@ -1843,25 +1839,6 @@ fn calculate_column_widths(app: &App) -> [u16; 7] {
     [id_col_width, name_col_width, assigned_col_width, start_col_width, dur_col_width, prog_col_width, deps_col_width]
 }
 
-fn calculate_todo_list_width(app: &App) -> u16 {
-    const PADDING: u16 = 6; // Account for border, bullet, and selection symbol
-    let mut max_width = 20; // Minimum width
-
-    for item in &app.all_projects.todo_list {
-        let name_width = UnicodeWidthStr::width(item.text.as_str()) as u16;
-        let desc_width = if item.description.is_empty() { 0 } else { UnicodeWidthStr::width(item.description.as_str()) as u16 + 4 };
-        
-        max_width = max_width.max(name_width).max(desc_width);
-    }
-
-    // If editing, also account for the input buffer
-    if app.input_mode == InputMode::Editing && app.focus_area == FocusArea::TodoList {
-        let buffer_width = UnicodeWidthStr::width(app.input_buffer.as_str()) as u16 + 6;
-        max_width = max_width.max(buffer_width);
-    }
-
-    max_width + PADDING
-}
 
 // --- UI RENDERING ---
 fn ui(frame: &mut Frame, app: &mut App) {
@@ -1904,24 +1881,14 @@ fn ui(frame: &mut Frame, app: &mut App) {
         left_width = total_width.saturating_sub(min_right_width);
     }
 
-    let mut constraints = vec![Constraint::Length(left_width), Constraint::Min(0)];
-    if app.todo_list_open {
-        let todo_width = calculate_todo_list_width(app);
-        constraints.push(Constraint::Length(todo_width));
-    }
-
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints(constraints)
+        .constraints([Constraint::Length(left_width), Constraint::Min(0)])
         .split(content_area);
 
     let table_area = main_chunks[0];
     render_task_table(frame, table_area, app, &column_widths);
     render_gantt_chart(frame, main_chunks[1], app);
-
-    if app.todo_list_open {
-        render_todo_list(frame, main_chunks[2], app);
-    }
 
     if let Some(details_area) = details_area {
         render_details_view(frame, details_area, app);
@@ -2035,21 +2002,25 @@ fn ui(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    // Render todo list popup overlay
+    if app.todo_list_open {
+        render_todo_list(frame, app);
+    }
+
     // Render help screen overlay last (on top of everything)
     if app.help_open {
         render_help_screen(frame);
     }
 }
 
-fn render_todo_list(frame: &mut Frame, area: Rect, app: &mut App) {
+fn render_todo_list(frame: &mut Frame, app: &mut App) {
+    let area = centered_rect(50, 70, frame.area());
+    frame.render_widget(Clear, area);
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title("Todo List (a: Add, Space: Toggle, Enter: Edit Desc, -: Remove)")
-        .border_style(if app.focus_area == FocusArea::TodoList {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        });
+        .border_style(Style::default().fg(Color::Yellow));
     
     let top_three_finished = app.all_projects.todo_list.iter()
         .take(3)
