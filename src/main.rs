@@ -818,7 +818,7 @@ impl App {
             };
             let remind_date = effective_date - Duration::days(*days_before as i64);
             if today >= remind_date {
-                if !self.all_projects.todo_list.iter().any(|t| t.text == *text) {
+                if !self.all_projects.todo_list.iter().any(|t| t.text == *text && !t.completed) {
                     self.all_projects.todo_list.push(TodoItem {
                         text: text.clone(),
                         completed: false,
@@ -2537,12 +2537,7 @@ fn render_scheduled_events(frame: &mut Frame, app: &mut App) {
         .title("Scheduled Events (a: Add, Enter: Edit, -: Delete, S/Esc: Close)")
         .border_style(Style::default().fg(Color::Magenta));
 
-    // Sort events by date ascending (clone indices for sorted display)
-    let mut sorted_indices: Vec<usize> = (0..app.all_projects.scheduled_events.len()).collect();
-    sorted_indices.sort_by_key(|&i| app.all_projects.scheduled_events[i].date);
-
-    let items: Vec<ListItem> = sorted_indices.iter().map(|&i| {
-        let event = &app.all_projects.scheduled_events[i];
+    let items: Vec<ListItem> = app.all_projects.scheduled_events.iter().enumerate().map(|(i, event)| {
         let remind_date = event.date - Duration::days(event.days_before as i64);
         let is_past = event.date < today;
         let is_due = today >= remind_date && !is_past;
