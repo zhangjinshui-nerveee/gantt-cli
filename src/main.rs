@@ -1181,6 +1181,12 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    // Esc closes the todo list popup
+    if app.todo_list_open && key.code == KeyCode::Esc {
+        app.toggle_todo_list();
+        return;
+    }
+
     if key.modifiers == KeyModifiers::CONTROL {
         match key.code {
             KeyCode::Char('s') => { app.save_all_projects().unwrap_or_else(|_| app.status_message = "Failed to save projects.".into()); },
