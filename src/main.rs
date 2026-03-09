@@ -1656,6 +1656,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                                 task.details = Some(details);
                             }
                             app.sync_project_with_todo_selection();
+                            app.todo_list_open = false;
                             app.focus_area = FocusArea::Tasks;
                             app.selected_task_field = TaskField::Progress;
                             app.input_mode = InputMode::Editing;
