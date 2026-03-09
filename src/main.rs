@@ -15,6 +15,7 @@ use std::fs;
 use std::io::{self, stdout};
 use std::panic;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use unicode_width::UnicodeWidthStr;
 
 // --- DATA STRUCTURES ---
@@ -208,6 +209,8 @@ struct App {
     scheduled_events_state: ListState,
     editing_event_field: Option<EventField>,
     selected_event_field: EventField,
+    file_mtime: Option<SystemTime>,
+    save_conflict_pending: bool,
 }
 
 fn get_default_data_path() -> PathBuf {
@@ -268,6 +271,8 @@ impl App {
             scheduled_events_state: ListState::default(),
             editing_event_field: None,
             selected_event_field: EventField::Name,
+            file_mtime: None,
+            save_conflict_pending: false,
         };
 
         let load_result = app.load_all_projects();
@@ -714,9 +719,11 @@ impl App {
         self.all_projects.active_project_index = self.current_project_index;
         let json_data = serde_json::to_string_pretty(&self.all_projects)?;
         fs::write(&self.current_file_path, json_data)?;
+        self.file_mtime = fs::metadata(&self.current_file_path).and_then(|m| m.modified()).ok();
         self.status_message = format!("All projects saved successfully to {}!", self.current_file_path);
         self.is_dirty = false;
         self.quit_pending = false;
+        self.save_conflict_pending = false;
         Ok(())
     }
 
@@ -729,10 +736,22 @@ impl App {
             self.current_project_index = self.all_projects.active_project_index;
             self.history.clear();
             self.redo_history.clear();
+            self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
             Ok(())
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "File not found"))
         }
+    }
+
+    fn file_was_modified_externally(&self) -> bool {
+        let stored = match self.file_mtime {
+            Some(t) => t,
+            None => return false,
+        };
+        fs::metadata(&self.current_file_path)
+            .and_then(|m| m.modified())
+            .map(|current| current != stored)
+            .unwrap_or(false)
     }
 
     fn save_state_for_undo(&mut self) {
@@ -1214,6 +1233,12 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         app.status_message = "Quit cancelled.".to_string();
     }
 
+    let is_ctrl_s = key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('s');
+    if app.save_conflict_pending && !is_ctrl_s {
+        app.save_conflict_pending = false;
+        app.status_message = "Save cancelled.".to_string();
+    }
+
     if app.confirm_delete_project {
          let is_ctrl_d = key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('d');
          if !is_ctrl_d {
@@ -1367,7 +1392,14 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
 
     if key.modifiers == KeyModifiers::CONTROL {
         match key.code {
-            KeyCode::Char('s') => { app.save_all_projects().unwrap_or_else(|_| app.status_message = "Failed to save projects.".into()); },
+            KeyCode::Char('s') => {
+                if !app.save_conflict_pending && app.file_was_modified_externally() {
+                    app.save_conflict_pending = true;
+                    app.status_message = "File was modified by another instance! Press Ctrl+s again to overwrite, or any other key to cancel.".to_string();
+                } else {
+                    app.save_all_projects().unwrap_or_else(|_| app.status_message = "Failed to save projects.".into());
+                }
+            },
             KeyCode::Char('r') => app.redo(),
             KeyCode::Char('d') => {
                  if app.confirm_delete_project {
