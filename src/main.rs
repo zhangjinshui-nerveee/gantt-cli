@@ -2427,11 +2427,12 @@ fn ui(frame: &mut Frame, app: &mut App) {
 
                         // Per-column adjustment based on user feedback:
                         // Name (idx 1): 0
-                        // All others (idx 2-6): 6
-                        let adjustment_offset = if selected_col_index <= 1 {
-                            0
-                        } else {
-                            6
+                        // AssignedTo (idx 2): 6
+                        // StartDate through Dependencies (idx 3+): 7
+                        let adjustment_offset = match app.selected_task_field {
+                            TaskField::Name => 0,
+                            TaskField::AssignedTo => 6,
+                            _ => 7,
                         };
 
                         let cursor_x = (selected_col_rect.x
