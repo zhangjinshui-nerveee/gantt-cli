@@ -2974,7 +2974,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
         if is_today {
             day_style = day_style.fg(Color::Black).bg(Color::Cyan);
         } else if is_deadline_day {
-            day_style = day_style.bg(Color::DarkGray).fg(Color::Red);
+            day_style = day_style.bg(Color::Rgb(60, 0, 0)).fg(Color::Red);
         }
 
         let weekday_char = match current_date.weekday() {
@@ -3058,7 +3058,9 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                             else { "█" }
                         }
                     } else {
-                        if is_today { "|" } else { " " }
+                        if is_today { "|" }
+                        else if is_deadline_day { "▏" }
+                        else { " " }
                     }
                 } else if is_task_day {
                     if is_parent {
@@ -3078,12 +3080,14 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                         }
                     }
                 } else {
-                    if is_today { "|  " } else { "   " }
+                    if is_today { "|  " }
+                    else if is_deadline_day { "▏  " }
+                    else { "   " }
                 };
 
                 let mut style = if is_today { row_style.fg(Color::Cyan) } else { row_style };
                 if is_deadline_day {
-                    style = style.fg(Color::Red);
+                    style = style.fg(Color::Red).bg(Color::Rgb(60, 0, 0));
                 }
                 // Apply subtle background highlight on empty (non-bar) cells for selected row
                 if is_selected && !is_task_day && !is_today {
