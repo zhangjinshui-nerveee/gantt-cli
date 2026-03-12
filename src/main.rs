@@ -653,6 +653,8 @@ impl App {
             iterations += 1;
         }
 
+        let has_cycle = !tasks_to_process.is_empty();
+
         for task in &mut current_project.tasks {
             if let Some(calculated) = calculated_tasks.get(&task.id) {
                 task.start_date = calculated.start_date;
@@ -712,6 +714,10 @@ impl App {
                     }
                 }
             }
+        }
+
+        if has_cycle {
+            self.status_message = "Warning: circular dependency detected — some tasks could not be scheduled.".to_string();
         }
     }
 
@@ -1798,6 +1804,7 @@ fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => {
             app.save_state_for_undo();
             save_buffer_to_task(app);
+            app.is_dirty = true;
             app.input_mode = InputMode::Normal;
             app.input_buffer.clear();
             app.recalculate_schedule();
@@ -2049,9 +2056,11 @@ fn save_buffer_to_task(app: &mut App) {
                     let reverse_id_map: HashMap<String, u32> = display_ids.iter().map(|(id, display)| (display.clone(), *id)).collect();
                     let tasks_clone = app.get_current_project().tasks.clone(); // Use a clone for validation
 
+                    let mut invalid_entries: Vec<String> = Vec::new();
                     let new_deps: Vec<u32> = input_buffer_owned.split(',')
                         .filter_map(|s| {
                             let trimmed = s.trim();
+                            if trimmed.is_empty() { return None; }
                             if let Some(id) = reverse_id_map.get(trimmed) {
                                 return Some(*id);
                             }
@@ -2060,9 +2069,13 @@ fn save_buffer_to_task(app: &mut App) {
                                     return Some(id);
                                 }
                             }
+                            invalid_entries.push(trimmed.to_string());
                             None
                         })
                         .collect();
+                    if !invalid_entries.is_empty() {
+                        app.status_message = format!("Unknown dependency ID(s) ignored: {}", invalid_entries.join(", "));
+                    }
                     
                     let task = &mut app.get_current_project_mut().tasks[index];
                     task.dependencies = new_deps;
