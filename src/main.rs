@@ -3027,7 +3027,9 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
 
     for (i, task) in current_project.tasks.iter().enumerate() {
         let is_parent = parent_ids.contains(&task.id);
-        let row_style = if app.focus_area == FocusArea::Tasks && app.table_state.selected() == Some(i) { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+        let is_selected = app.focus_area == FocusArea::Tasks && app.table_state.selected() == Some(i);
+        let row_style = if is_selected { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+        let selected_empty_bg = Color::Rgb(30, 35, 50);
         let mut bar_spans = vec![];
         if let (Some(start), Some(end)) = (task.start_date, task.end_date) {
             let progress_duration = (task.duration as f32 * (task.progress as f32 / 100.0)).round() as i64;
@@ -3042,7 +3044,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                 let is_today = current_date == app.today;
                 let is_deadline_day = app.get_current_project().project_end_date == Some(current_date);
                 let is_task_day = current_date >= start && current_date <= end;
-                
+
                 let content = if app.all_projects.compact_timeline {
                     if is_task_day {
                         if is_parent {
@@ -3082,6 +3084,10 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
                 let mut style = if is_today { row_style.fg(Color::Cyan) } else { row_style };
                 if is_deadline_day {
                     style = style.fg(Color::Red);
+                }
+                // Apply subtle background highlight on empty (non-bar) cells for selected row
+                if is_selected && !is_task_day && !is_today {
+                    style = style.bg(selected_empty_bg);
                 }
                 bar_spans.push(Span::styled(content, style));
             }
