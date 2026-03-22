@@ -3028,7 +3028,42 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     for (i, task) in current_project.tasks.iter().enumerate() {
         let is_parent = parent_ids.contains(&task.id);
         let is_selected = app.focus_area == FocusArea::Tasks && app.table_state.selected() == Some(i);
-        let row_style = if is_selected { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
+
+        let is_today_task = task.start_date.map_or(false, |start| {
+            task.end_date.map_or(false, |end| app.today >= start && app.today <= end)
+        });
+        let urgency_level: Option<f32> = if let (Some(start), Some(end)) = (task.start_date, task.end_date) {
+            if app.today >= start && app.today <= end {
+                let days_from_start = (app.today - start).num_days() + 1;
+                let total_duration = (end - start).num_days() + 1;
+                if total_duration > 0 {
+                    let expected_progress = days_from_start as f32 / total_duration as f32 * 100.0;
+                    let progress_gap = expected_progress - task.progress as f32;
+                    if progress_gap > 0.0 { Some((progress_gap / 100.0).min(1.0)) } else { None }
+                } else { None }
+            } else { None }
+        } else { None };
+        let is_overdue = task.end_date.map_or(false, |end| app.today > end && task.progress < 100);
+
+        let base_color = if task.progress == 100 {
+            Color::DarkGray
+        } else if is_overdue {
+            Color::Red
+        } else {
+            match app.highlight_mode {
+                HighlightMode::Today => {
+                    if is_today_task { Color::Rgb(173, 216, 230) } else { Color::White }
+                }
+                HighlightMode::Urgent => {
+                    if let Some(level) = urgency_level {
+                        let green = (220.0 - 140.0 * level) as u8;
+                        let blue = (50.0 - 50.0 * level) as u8;
+                        Color::Rgb(255, green, blue)
+                    } else { Color::White }
+                }
+            }
+        };
+        let row_style = Style::default().fg(base_color).add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() });
         let selected_empty_bg = Color::Rgb(30, 35, 50);
         let mut bar_spans = vec![];
         if let (Some(start), Some(end)) = (task.start_date, task.end_date) {
