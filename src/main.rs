@@ -48,12 +48,42 @@ struct ProjectData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct SubTask {
+    text: String,
+    #[serde(default)]
+    completed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 struct TodoItem {
     text: String,
     #[serde(default)]
     completed: bool,
     #[serde(default)]
+    subtasks: Vec<SubTask>,
+}
+
+// Intermediate struct for backward-compat deserialization (old `description` field)
+#[derive(Deserialize)]
+struct TodoItemRaw {
+    text: String,
+    #[serde(default)]
+    completed: bool,
+    #[serde(default)]
     description: String,
+    #[serde(default)]
+    subtasks: Vec<SubTask>,
+}
+
+impl<'de> Deserialize<'de> for TodoItem {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = TodoItemRaw::deserialize(deserializer)?;
+        let mut subtasks = raw.subtasks;
+        if subtasks.is_empty() && !raw.description.is_empty() {
+            subtasks.push(SubTask { text: raw.description, completed: false });
+        }
+        Ok(TodoItem { text: raw.text, completed: raw.completed, subtasks })
+    }
 }
 
 #[derive(Deserialize)]
@@ -100,7 +130,7 @@ where
 {
     let items: Vec<TodoItemInput> = Vec::deserialize(deserializer)?;
     Ok(items.into_iter().map(|item| match item {
-        TodoItemInput::String(s) => TodoItem { text: s, completed: false, description: String::new() },
+        TodoItemInput::String(s) => TodoItem { text: s, completed: false, subtasks: vec![] },
         TodoItemInput::Struct(s) => s,
     }).collect())
 }
@@ -203,6 +233,8 @@ struct App {
     deleted_projects: Vec<ProjectData>,
     help_open: bool,
     editing_todo_name: bool,
+    editing_subtask: bool,
+    todo_subtask_index: Option<usize>,
     column_config_open: bool,
     column_config_selected: usize,
     scheduled_events_open: bool,
@@ -265,6 +297,8 @@ impl App {
             deleted_projects: vec![],
             help_open: false,
             editing_todo_name: false,
+            editing_subtask: false,
+            todo_subtask_index: None,
             column_config_open: false,
             column_config_selected: 0,
             scheduled_events_open: false,
@@ -408,26 +442,29 @@ impl App {
             
             if item.completed {
                 item_str.push_str(&format!("✅ **{}**\n", item.text));
-                if !item.description.is_empty() {
-                    item_str.push_str(&format!("  {}\n", item.description));
+                for sub in &item.subtasks {
+                    let cb = if sub.completed { "☑" } else { "☐" };
+                    item_str.push_str(&format!("  {} {}\n", cb, sub.text));
                 }
                 item_str.push_str("\n");
                 completed_body.push_str(&item_str);
             } else {
                 let is_dimmed = i >= 3 && !top_three_finished;
-                
+
                 if is_dimmed {
                     item_str.push_str(&format!("◌ _**{}**_\n", item.text));
-                    if !item.description.is_empty() {
-                        item_str.push_str(&format!("  _{}_\n", item.description));
+                    for sub in &item.subtasks {
+                        let cb = if sub.completed { "☑" } else { "☐" };
+                        item_str.push_str(&format!("  _{} {}_\n", cb, sub.text));
                     }
                     item_str.push_str("\n");
                     future_body.push_str(&item_str);
                 } else {
                     let prefix = if i < 3 { "🔥 " } else { "• " };
                     item_str.push_str(&format!("{}**{}**\n", prefix, item.text));
-                    if !item.description.is_empty() {
-                        item_str.push_str(&format!("  {}\n", item.description));
+                    for sub in &item.subtasks {
+                        let cb = if sub.completed { "☑" } else { "☐" };
+                        item_str.push_str(&format!("  {} {}\n", cb, sub.text));
                     }
                     item_str.push_str("\n");
                     priority_body.push_str(&item_str);
@@ -811,6 +848,7 @@ impl App {
             self.sync_project_with_todo_selection();
         } else {
             self.focus_area = FocusArea::Tasks;
+            self.todo_subtask_index = None;
         }
     }
 
@@ -847,7 +885,7 @@ impl App {
                     self.all_projects.todo_list.push(TodoItem {
                         text: text.clone(),
                         completed: false,
-                        description: String::new(),
+                        subtasks: vec![],
                     });
                     promoted += 1;
                     self.is_dirty = true;
@@ -866,7 +904,7 @@ impl App {
                 self.status_message = format!("Task '{}' is already in the todo list.", task_name);
             } else {
                 self.save_state_for_undo();
-                self.all_projects.todo_list.push(TodoItem { text: task_name.clone(), completed: false, description: String::new() });
+                self.all_projects.todo_list.push(TodoItem { text: task_name.clone(), completed: false, subtasks: vec![] });
                 self.status_message = format!("Task '{}' added to todo list.", task_name);
                 self.is_dirty = true;
                             }
@@ -1454,21 +1492,67 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('j') | KeyCode::Down => navigate_down(app),
         KeyCode::Char('k') | KeyCode::Up => navigate_up(app),
-        KeyCode::Char('h') | KeyCode::Left => select_previous_field(app),
-        KeyCode::Char('l') | KeyCode::Right => select_next_field(app),
+        KeyCode::Char('h') | KeyCode::Left => {
+            if app.focus_area == FocusArea::TodoList {
+                app.todo_subtask_index = None;
+            } else {
+                select_previous_field(app);
+            }
+        },
+        KeyCode::Char('l') | KeyCode::Right => {
+            if app.focus_area == FocusArea::TodoList {
+                if app.todo_subtask_index.is_none() {
+                    if let Some(idx) = app.todo_list_state.selected() {
+                        if app.all_projects.todo_list.get(idx).map(|t| !t.subtasks.is_empty()).unwrap_or(false) {
+                            app.todo_subtask_index = Some(0);
+                        }
+                    }
+                }
+            } else {
+                select_next_field(app);
+            }
+        },
         KeyCode::Char('a') => {
             if app.focus_area == FocusArea::TodoList {
-                app.save_state_for_undo();
-                app.all_projects.todo_list.push(TodoItem { text: String::new(), completed: false, description: String::new() });
-                let new_idx = app.all_projects.todo_list.len() - 1;
-                app.todo_list_state.select(Some(new_idx));
-                app.editing_todo_name = true;
-                app.input_mode = InputMode::Editing;
-                app.input_buffer.clear();
-                app.is_dirty = true;
+                if let Some(sub_i) = app.todo_subtask_index {
+                    // Add subtask after current
+                    if let Some(todo_i) = app.todo_list_state.selected() {
+                        app.save_state_for_undo();
+                        let insert_pos = sub_i + 1;
+                        app.all_projects.todo_list[todo_i].subtasks.insert(insert_pos, SubTask { text: String::new(), completed: false });
+                        app.todo_subtask_index = Some(insert_pos);
+                        app.editing_subtask = true;
+                        app.input_mode = InputMode::Editing;
+                        app.input_buffer.clear();
+                        app.is_dirty = true;
+                    }
+                } else {
+                    app.save_state_for_undo();
+                    app.all_projects.todo_list.push(TodoItem { text: String::new(), completed: false, subtasks: vec![] });
+                    let new_idx = app.all_projects.todo_list.len() - 1;
+                    app.todo_list_state.select(Some(new_idx));
+                    app.editing_todo_name = true;
+                    app.input_mode = InputMode::Editing;
+                    app.input_buffer.clear();
+                    app.is_dirty = true;
+                }
             } else {
                 app.add_new_sibling_task();
                 load_buffer_for_editing(app);
+            }
+        },
+        KeyCode::Char('i') => {
+            if app.focus_area == FocusArea::TodoList {
+                if let Some(todo_i) = app.todo_list_state.selected() {
+                    app.save_state_for_undo();
+                    app.all_projects.todo_list[todo_i].subtasks.push(SubTask { text: String::new(), completed: false });
+                    let sub_i = app.all_projects.todo_list[todo_i].subtasks.len() - 1;
+                    app.todo_subtask_index = Some(sub_i);
+                    app.editing_subtask = true;
+                    app.input_mode = InputMode::Editing;
+                    app.input_buffer.clear();
+                    app.is_dirty = true;
+                }
             }
         },
         KeyCode::Char('>') => app.indent_task(),
@@ -1574,7 +1658,23 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('+') => app.add_selected_task_to_todo(),
         KeyCode::Char('-') => {
             if app.focus_area == FocusArea::TodoList {
-                app.remove_selected_todo_item();
+                if let Some(sub_i) = app.todo_subtask_index {
+                    if let Some(todo_i) = app.todo_list_state.selected() {
+                        app.save_state_for_undo();
+                        let item = &mut app.all_projects.todo_list[todo_i];
+                        if sub_i < item.subtasks.len() {
+                            item.subtasks.remove(sub_i);
+                            if item.subtasks.is_empty() {
+                                app.todo_subtask_index = None;
+                            } else {
+                                app.todo_subtask_index = Some(sub_i.min(item.subtasks.len() - 1));
+                            }
+                            app.is_dirty = true;
+                        }
+                    }
+                } else {
+                    app.remove_selected_todo_item();
+                }
             }
         }
         KeyCode::Char('N') => app.next_project(),
@@ -1645,7 +1745,15 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     }
                 }
                 FocusArea::TodoList => {
-                    if app.todo_list_state.selected().is_some() {
+                    if let Some(sub_i) = app.todo_subtask_index {
+                        if let Some(todo_i) = app.todo_list_state.selected() {
+                            if app.all_projects.todo_list.get(todo_i).map(|t| sub_i < t.subtasks.len()).unwrap_or(false) {
+                                app.editing_subtask = true;
+                                app.input_mode = InputMode::Editing;
+                                load_buffer_for_editing(app);
+                            }
+                        }
+                    } else if app.todo_list_state.selected().is_some() {
                         app.input_mode = InputMode::Editing;
                         load_buffer_for_editing(app);
                     }
@@ -1658,15 +1766,23 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char(' ') => {
             if app.focus_area == FocusArea::TodoList {
-                if let Some(idx) = app.todo_list_state.selected() {
+                if let Some(sub_i) = app.todo_subtask_index {
+                    // Toggle the selected subtask
+                    if let Some(idx) = app.todo_list_state.selected() {
+                        let can_toggle = app.all_projects.todo_list.get(idx).map(|t| sub_i < t.subtasks.len()).unwrap_or(false);
+                        if can_toggle {
+                            app.save_state_for_undo();
+                            app.all_projects.todo_list[idx].subtasks[sub_i].completed = !app.all_projects.todo_list[idx].subtasks[sub_i].completed;
+                            app.is_dirty = true;
+                        }
+                    }
+                } else if let Some(idx) = app.todo_list_state.selected() {
                     app.save_state_for_undo();
                     let mut was_just_finished = false;
-                    let mut todo_description = String::new();
                     let mut todo_text = String::new();
                     if let Some(item) = app.all_projects.todo_list.get_mut(idx) {
                         item.completed = !item.completed;
                         was_just_finished = item.completed;
-                        todo_description = item.description.clone();
                         todo_text = item.text.clone();
                         app.is_dirty = true;
                     }
@@ -1683,16 +1799,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                             }
                         }
 
-                        if let Some((p_idx, t_idx)) = target {
-                            if !todo_description.is_empty() {
-                                let task = &mut app.all_projects.projects[p_idx].tasks[t_idx];
-                                let mut details = task.details.clone().unwrap_or_default();
-                                if !details.is_empty() && !details.ends_with('\n') {
-                                    details.push('\n');
-                                }
-                                details.push_str(&format!("{}: {}", app.today.format("%m/%d/%y"), todo_description));
-                                task.details = Some(details);
-                            }
+                        if let Some((_p_idx, _t_idx)) = target {
                             app.sync_project_with_todo_selection();
                             app.todo_list_open = false;
                             app.focus_area = FocusArea::Tasks;
@@ -1703,7 +1810,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                             app.status_message = format!("'{}' marked done.", todo_text);
                         }
                     }
-                                    }
+                }
             }
         }
         _ => {}
@@ -1825,6 +1932,26 @@ fn handle_editing_mode(app: &mut App, key: KeyEvent) {
                 }
                 app.editing_todo_name = false;
             }
+            if app.editing_subtask {
+                // Remove empty subtask that was being named
+                if let Some(idx) = app.todo_list_state.selected() {
+                    if let Some(sub_i) = app.todo_subtask_index {
+                        if idx < app.all_projects.todo_list.len() {
+                            let item = &mut app.all_projects.todo_list[idx];
+                            if sub_i < item.subtasks.len() && item.subtasks[sub_i].text.is_empty() {
+                                item.subtasks.remove(sub_i);
+                                if item.subtasks.is_empty() {
+                                    app.todo_subtask_index = None;
+                                } else {
+                                    app.todo_subtask_index = Some(sub_i.min(item.subtasks.len() - 1));
+                                }
+                                app.is_dirty = true;
+                            }
+                        }
+                    }
+                }
+                app.editing_subtask = false;
+            }
             app.input_mode = InputMode::Normal;
             app.input_buffer.clear();
         }
@@ -1854,7 +1981,13 @@ fn navigate_up(app: &mut App) {
             }
         }
         FocusArea::TodoList => {
-            if let Some(selected) = app.todo_list_state.selected() {
+            if let Some(sub_i) = app.todo_subtask_index {
+                if sub_i > 0 {
+                    app.todo_subtask_index = Some(sub_i - 1);
+                } else {
+                    app.todo_subtask_index = None;
+                }
+            } else if let Some(selected) = app.todo_list_state.selected() {
                 if selected > 0 {
                     app.todo_list_state.select(Some(selected - 1));
                     app.sync_project_with_todo_selection();
@@ -1894,7 +2027,20 @@ fn navigate_down(app: &mut App) {
             }
         }
         FocusArea::TodoList => {
-            if let Some(selected) = app.todo_list_state.selected() {
+            if let Some(sub_i) = app.todo_subtask_index {
+                if let Some(todo_i) = app.todo_list_state.selected() {
+                    let sub_len = app.all_projects.todo_list.get(todo_i).map(|t| t.subtasks.len()).unwrap_or(0);
+                    if sub_i + 1 < sub_len {
+                        app.todo_subtask_index = Some(sub_i + 1);
+                    } else {
+                        app.todo_subtask_index = None;
+                        if todo_i + 1 < app.all_projects.todo_list.len() {
+                            app.todo_list_state.select(Some(todo_i + 1));
+                            app.sync_project_with_todo_selection();
+                        }
+                    }
+                }
+            } else if let Some(selected) = app.todo_list_state.selected() {
                 if selected < app.all_projects.todo_list.len() - 1 {
                     app.todo_list_state.select(Some(selected + 1));
                     app.sync_project_with_todo_selection();
@@ -1996,8 +2142,11 @@ fn load_buffer_for_editing(app: &mut App) {
                 if idx < app.all_projects.todo_list.len() {
                     if app.editing_todo_name {
                         app.input_buffer = app.all_projects.todo_list[idx].text.clone();
-                    } else {
-                        app.input_buffer = app.all_projects.todo_list[idx].description.clone();
+                    } else if app.editing_subtask {
+                        if let Some(sub_i) = app.todo_subtask_index {
+                            app.input_buffer = app.all_projects.todo_list[idx].subtasks
+                                .get(sub_i).map(|s| s.text.clone()).unwrap_or_default();
+                        }
                     }
                 }
             }
@@ -2180,8 +2329,22 @@ fn save_buffer_to_task(app: &mut App) {
                             app.all_projects.todo_list[idx].text = input_buffer_owned;
                         }
                         app.editing_todo_name = false;
-                    } else {
-                        app.all_projects.todo_list[idx].description = input_buffer_owned;
+                    } else if app.editing_subtask {
+                        if let Some(sub_i) = app.todo_subtask_index {
+                            if sub_i < app.all_projects.todo_list[idx].subtasks.len() {
+                                if input_buffer_owned.trim().is_empty() {
+                                    app.all_projects.todo_list[idx].subtasks.remove(sub_i);
+                                    if app.all_projects.todo_list[idx].subtasks.is_empty() {
+                                        app.todo_subtask_index = None;
+                                    } else {
+                                        app.todo_subtask_index = Some(sub_i.min(app.all_projects.todo_list[idx].subtasks.len() - 1));
+                                    }
+                                } else {
+                                    app.all_projects.todo_list[idx].subtasks[sub_i].text = input_buffer_owned;
+                                }
+                            }
+                        }
+                        app.editing_subtask = false;
                     }
                     app.is_dirty = true;
                 }
@@ -2504,12 +2667,15 @@ fn render_todo_list(frame: &mut Frame, app: &mut App) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Todo List (a: Add, Space: Toggle, Enter: Edit Desc, -: Remove)")
+        .title("Todo List (a/i: Add subtask, l/r: Enter subtasks, Space: Toggle, Enter: Edit, -: Remove)")
         .border_style(Style::default().fg(Color::Yellow));
-    
+
     let top_three_finished = app.all_projects.todo_list.iter()
         .take(3)
         .all(|t| t.completed);
+
+    let selected_todo = app.todo_list_state.selected();
+    let selected_sub = app.todo_subtask_index;
 
     let items: Vec<ListItem> = app.all_projects.todo_list.iter()
         .enumerate()
@@ -2524,9 +2690,10 @@ fn render_todo_list(frame: &mut Frame, app: &mut App) {
                 Style::default().fg(Color::DarkGray)
             };
 
+            let is_selected_item = selected_todo == Some(i);
             let is_editing = app.focus_area == FocusArea::TodoList
                              && app.input_mode == InputMode::Editing
-                             && app.todo_list_state.selected() == Some(i);
+                             && is_selected_item;
             let is_editing_name = is_editing && app.editing_todo_name;
 
             let name_display = if is_editing_name {
@@ -2539,29 +2706,29 @@ fn render_todo_list(frame: &mut Frame, app: &mut App) {
             } else {
                 style
             };
-            let main_text = Line::from(name_display).style(name_style);
+            let mut lines = vec![Line::from(name_display).style(name_style)];
 
-            let desc_content = if is_editing && !is_editing_name {
-                format!("  > {}", app.input_buffer)
-            } else {
-                format!("  {}", item.description)
-            };
-
-            let desc_style = if item.completed {
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
-            } else if is_editing && !is_editing_name {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::Indexed(247))
-            };
-
-            let desc_line = Line::from(desc_content).style(desc_style);
-
-            let mut lines = vec![main_text];
-            if !item.description.is_empty() || (is_editing && !is_editing_name) {
-                lines.push(desc_line);
+            for (sub_i, sub) in item.subtasks.iter().enumerate() {
+                let is_selected_sub = is_selected_item && selected_sub == Some(sub_i);
+                let is_editing_sub = is_editing && app.editing_subtask && is_selected_sub;
+                let cb = if sub.completed { "[x]" } else { "[ ]" };
+                let sub_text = if is_editing_sub {
+                    format!("  {} {}_", cb, app.input_buffer)
+                } else {
+                    format!("  {} {}", cb, sub.text)
+                };
+                let sub_style = if sub.completed {
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+                } else if is_editing_sub {
+                    Style::default().fg(Color::Cyan)
+                } else if is_selected_sub {
+                    Style::default().fg(Color::White).bg(Color::Rgb(40, 60, 40))
+                } else {
+                    Style::default().fg(Color::Indexed(247))
+                };
+                lines.push(Line::from(sub_text).style(sub_style));
             }
-            
+
             ListItem::new(lines)
         })
         .collect();
