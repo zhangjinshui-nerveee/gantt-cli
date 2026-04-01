@@ -341,6 +341,7 @@ impl App {
         }
 
         app.recalculate_schedule();
+        app.promote_due_events();
         app
     }
 
@@ -2894,7 +2895,7 @@ fn render_scheduled_events(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(list, layout[1], &mut app.scheduled_events_state);
 }
 
-fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[u16; 8]) {
+fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths: &[u16; 8]) {
     let current_project = app.get_current_project();
     let block = Block::default().borders(Borders::ALL).title(format!("Project Details & Tasks - {}", current_project.project_name));
     let inner_area = block.inner(area);
@@ -3095,7 +3096,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &App, column_widths: &[
     let table = Table::new(rows, constraints)
         .row_highlight_style(Style::default().bg(Color::Rgb(50, 50, 50)).add_modifier(Modifier::BOLD));
 
-    frame.render_stateful_widget(table, tasks_area, &mut app.table_state.clone());
+    frame.render_stateful_widget(table, tasks_area, &mut app.table_state);
 }
 
 fn render_details_view(frame: &mut Frame, area: Rect, app: &App) {
@@ -3114,7 +3115,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
 
-    let chart_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(0)]).split(inner_area);
+    let chart_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(4), Constraint::Min(0)]).split(inner_area);
     let header_area = chart_layout[0];
     let content_area = chart_layout[1];
     
@@ -3181,7 +3182,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
     
-    let header_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).split(header_area);
+    let header_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).split(header_area);
     frame.render_widget(Paragraph::new(Line::from(month_spans)).scroll((0, 0)), header_layout[0]);
     frame.render_widget(Paragraph::new(Line::from(day_spans)).scroll((0, 0)), header_layout[1]);
     frame.render_widget(Paragraph::new(Line::from(weekday_spans)).scroll((0, 0)), header_layout[2]);
@@ -3190,7 +3191,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
         .filter_map(|t| t.parent_id)
         .collect();
 
-    let mut lines = vec![Line::from(""); 1]; // 1 for header alignment
+    let mut lines: Vec<Line> = vec![];
 
     for (i, task) in current_project.tasks.iter().enumerate() {
         let is_parent = parent_ids.contains(&task.id);
@@ -3301,7 +3302,8 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
         lines.push(Line::from(bar_spans).style(row_style));
     }
 
-    frame.render_widget(Paragraph::new(lines), content_area);
+    let scroll_offset = app.table_state.offset() as u16;
+    frame.render_widget(Paragraph::new(lines).scroll((scroll_offset, 0)), content_area);
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
