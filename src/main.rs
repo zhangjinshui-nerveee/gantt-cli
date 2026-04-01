@@ -2611,7 +2611,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
                                      + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16)
                                      .saturating_sub(adjustment_offset);
 
-                        let cursor_y = tasks_area.y + selected_row_index as u16;
+                        let cursor_y = tasks_area.y + (selected_row_index - app.table_state.offset()) as u16;
                         frame.set_cursor_position((cursor_x, cursor_y));
                     }
                 }
