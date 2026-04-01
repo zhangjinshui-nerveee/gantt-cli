@@ -2290,20 +2290,12 @@ fn save_buffer_to_task(app: &mut App) {
                                     NaiveDate::parse_from_str(&input_buffer_owned, "%m/%d/%y").ok()
                                 };
                                 if let Some(new_start) = new_start {
-                                    let end_date = task.end_date;
-                                    let new_duration = end_date.map(|end| (end - new_start).num_days() + 1);
-                                    if new_duration.map_or(false, |d| d < 1) {
-                                        app.status_message = "Start date must be before end date.".to_string();
-                                    } else {
-                                        if let Some(d) = new_duration {
-                                            task.duration = d;
-                                        }
-                                        task.manual_start_date = Some(new_start);
-                                        let had_deps = !task.dependencies.is_empty();
-                                        task.dependencies.clear();
-                                        if had_deps {
-                                            app.status_message = "Dependencies cleared for task with manual start date.".to_string();
-                                        }
+                                    // Keep existing duration; end date is recalculated from start + duration
+                                    task.manual_start_date = Some(new_start);
+                                    let had_deps = !task.dependencies.is_empty();
+                                    task.dependencies.clear();
+                                    if had_deps {
+                                        app.status_message = "Dependencies cleared for task with manual start date.".to_string();
                                     }
                                 } else {
                                     app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
