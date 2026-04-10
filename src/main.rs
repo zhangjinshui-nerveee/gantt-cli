@@ -45,6 +45,8 @@ struct ProjectData {
     #[serde(rename = "day_offset", alias = "week_to_show", default)]
     day_offset: i64,
     tasks: Vec<Task>,
+    #[serde(default)]
+    archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -149,6 +151,8 @@ struct AllProjectsData {
     column_visibility: ColumnVisibility,
     #[serde(default)]
     scheduled_events: Vec<ScheduledEvent>,
+    #[serde(default)]
+    show_archived: bool,
 }
 
 #[derive(Clone)]
@@ -271,6 +275,7 @@ impl App {
                 compact_timeline: false,
                 column_visibility: ColumnVisibility::default(),
                 scheduled_events: vec![],
+                show_archived: false,
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
@@ -352,6 +357,7 @@ impl App {
             project_end_date: None,
             day_offset: 0,
             tasks: vec![],
+            archived: false,
         };
         default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, details: None, parent_id: None, start_date: None, end_date: None });
         default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, details: None, parent_id: None, start_date: None, end_date: None });
@@ -372,6 +378,7 @@ impl App {
             project_end_date: None,
             day_offset: 0,
             tasks: vec![],
+            archived: false,
         };
         self.all_projects.projects.push(new_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
@@ -418,6 +425,42 @@ impl App {
             self.is_dirty = true;
         } else {
             self.status_message = "No deleted projects to restore.".to_string();
+        }
+    }
+
+    fn archive_current_project(&mut self) {
+        let was_archived = self.get_current_project().archived;
+        let project_name = self.get_current_project().project_name.clone();
+        self.get_current_project_mut().archived = !was_archived;
+        self.is_dirty = true;
+
+        if !was_archived && !self.all_projects.show_archived {
+            // Just archived — navigate away to a non-archived project
+            let non_archived_count = self.all_projects.projects.iter().filter(|p| !p.archived).count();
+            if non_archived_count == 0 {
+                // All projects are now archived; reveal them
+                self.all_projects.show_archived = true;
+                self.status_message = format!("Archived '{}'. All projects archived — showing archived projects.", project_name);
+            } else {
+                // Move to the next non-archived project
+                let start = self.current_project_index;
+                let len = self.all_projects.projects.len();
+                let mut idx = (start + 1) % len;
+                while idx != start {
+                    if !self.all_projects.projects[idx].archived {
+                        break;
+                    }
+                    idx = (idx + 1) % len;
+                }
+                self.current_project_index = idx;
+                self.recalculate_schedule();
+                self.table_state.select(if self.get_current_project().tasks.is_empty() { None } else { Some(0) });
+                self.status_message = format!("Archived '{}'. Press Ctrl+b to view archived projects.", project_name);
+            }
+        } else if was_archived {
+            self.status_message = format!("Unarchived '{}'.", project_name);
+        } else {
+            self.status_message = format!("Archived '{}'.", project_name);
         }
     }
 
@@ -995,27 +1038,51 @@ impl App {
     }
 
     fn next_project(&mut self) {
-        if self.all_projects.projects.len() > 1 {
-            self.save_all_projects().unwrap_or_else(|_| self.status_message = "Failed to save current project before switching.".into());
-            self.current_project_index = (self.current_project_index + 1) % self.all_projects.projects.len();
-            self.status_message = format!("Switched to project: {}", self.get_current_project().project_name);
-            self.recalculate_schedule();
-            self.table_state.select(Some(0));
-        } else {
+        let len = self.all_projects.projects.len();
+        if len <= 1 {
             self.status_message = "No other projects to switch to.".to_string();
+            return;
         }
+        let start = self.current_project_index;
+        let mut idx = (start + 1) % len;
+        while idx != start {
+            let skip = !self.all_projects.show_archived && self.all_projects.projects[idx].archived;
+            if !skip { break; }
+            idx = (idx + 1) % len;
+        }
+        if idx == start {
+            self.status_message = "No other projects to switch to.".to_string();
+            return;
+        }
+        self.save_all_projects().unwrap_or_else(|_| self.status_message = "Failed to save current project before switching.".into());
+        self.current_project_index = idx;
+        self.status_message = format!("Switched to project: {}", self.get_current_project().project_name);
+        self.recalculate_schedule();
+        self.table_state.select(Some(0));
     }
 
     fn previous_project(&mut self) {
-        if self.all_projects.projects.len() > 1 {
-            self.save_all_projects().unwrap_or_else(|_| self.status_message = "Failed to save current project before switching.".into());
-            self.current_project_index = (self.current_project_index + self.all_projects.projects.len() - 1) % self.all_projects.projects.len();
-            self.status_message = format!("Switched to project: {}", self.get_current_project().project_name);
-            self.recalculate_schedule();
-            self.table_state.select(Some(0));
-        } else {
+        let len = self.all_projects.projects.len();
+        if len <= 1 {
             self.status_message = "No other projects to switch to.".to_string();
+            return;
         }
+        let start = self.current_project_index;
+        let mut idx = (start + len - 1) % len;
+        while idx != start {
+            let skip = !self.all_projects.show_archived && self.all_projects.projects[idx].archived;
+            if !skip { break; }
+            idx = (idx + len - 1) % len;
+        }
+        if idx == start {
+            self.status_message = "No other projects to switch to.".to_string();
+            return;
+        }
+        self.save_all_projects().unwrap_or_else(|_| self.status_message = "Failed to save current project before switching.".into());
+        self.current_project_index = idx;
+        self.status_message = format!("Switched to project: {}", self.get_current_project().project_name);
+        self.recalculate_schedule();
+        self.table_state.select(Some(0));
     }
 
     fn move_project_forward(&mut self) {
@@ -1459,6 +1526,15 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             KeyCode::Char('n') => app.move_project_forward(),
             KeyCode::Char('p') => app.move_project_backward(),
             KeyCode::Char('f') => app.push_todo_to_phone(),
+            KeyCode::Char('b') => {
+                app.all_projects.show_archived = !app.all_projects.show_archived;
+                app.is_dirty = true;
+                app.status_message = if app.all_projects.show_archived {
+                    "Showing archived projects.".to_string()
+                } else {
+                    "Hiding archived projects.".to_string()
+                };
+            },
             _ => {}
         }
         return;
@@ -1717,6 +1793,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 "Normal timeline (3 chars/day). Press Z to switch back.".to_string()
             };
         },
+        KeyCode::Char('X') => app.archive_current_project(),
         KeyCode::Enter => {
             match app.focus_area {
                 FocusArea::Project(_) => {
@@ -2920,7 +2997,14 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
 
     let day_offset_text = if app.focus_area == FocusArea::Project(ProjectField::DayOffset) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.day_offset.to_string() };
 
-    frame.render_widget(Paragraph::new(format!("Project: {} ({}/{})", name_text, app.current_project_index + 1, app.all_projects.projects.len())).style(name_style), layout[0]);
+    let archived_count = app.all_projects.projects.iter().filter(|p| p.archived).count();
+    let archived_suffix = if archived_count > 0 && !app.all_projects.show_archived {
+        format!(", +{} archived", archived_count)
+    } else {
+        String::new()
+    };
+    let archived_label = if current_project.archived { " [ARCHIVED]" } else { "" };
+    frame.render_widget(Paragraph::new(format!("Project: {}{} ({}/{}{})", name_text, archived_label, app.current_project_index + 1, app.all_projects.projects.len(), archived_suffix)).style(name_style), layout[0]);
     frame.render_widget(Paragraph::new(Line::from(vec![
         Span::styled(format!("Start Date: {}", start_date_text), start_date_style),
         Span::raw(" | "),
@@ -3424,6 +3508,8 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from(Span::styled("PROJECT", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  N/P              Next/previous project"),
         Line::from("  C                Create new project"),
+        Line::from("  X                Archive/unarchive current project"),
+        Line::from("  Ctrl+b           Toggle show archived projects"),
         Line::from("  Ctrl+d           Delete project (press twice)"),
         Line::from("  Ctrl+u           Restore deleted project"),
         Line::from("  Ctrl+n/Ctrl+p    Move project order"),
