@@ -875,13 +875,13 @@ impl App {
                 false
             }
 
-            fn task_label(task: &Task) -> String {
+            let task_label = |task: &Task| -> String {
                 if task.create_note {
                     format!("[[{}]]", sanitize_filename(&task.name))
                 } else {
                     task.name.clone()
                 }
-            }
+            };
 
             fn collect_lines(
                 id: u32,
@@ -889,6 +889,7 @@ impl App {
                 children_map: &HashMap<u32, Vec<u32>>,
                 task_map: &HashMap<u32, &Task>,
                 is_wip: &dyn Fn(&Task) -> bool,
+                task_label: &dyn Fn(&Task) -> String,
                 lines: &mut Vec<String>,
             ) {
                 let task = match task_map.get(&id) { Some(t) => t, None => return };
@@ -905,26 +906,65 @@ impl App {
                 let child_indent = format!("{}  ", indent);
                 if let Some(kids) = children_map.get(&id) {
                     for &kid_id in kids {
-                        collect_lines(kid_id, &child_indent, children_map, task_map, is_wip, lines);
+                        collect_lines(kid_id, &child_indent, children_map, task_map, is_wip, task_label, lines);
                     }
                 }
             }
 
             let mut task_lines: Vec<String> = vec![];
             for parent in &top_level {
-                collect_lines(parent.id, "", &children_map, &task_map, &is_wip, &mut task_lines);
+                collect_lines(parent.id, "", &children_map, &task_map, &is_wip, &task_label, &mut task_lines);
             }
 
             if task_lines.is_empty() { continue; }
-            let mut lines = vec![format!("## {}", project_clone.project_name)];
+            let mut lines = vec![format!("### {}", project_clone.project_name)];
             lines.extend(task_lines);
             sections.push(lines.join("\n"));
         }
 
-        let content = if sections.is_empty() {
+        // Build a name→create_note lookup across all non-archived projects
+        let note_task_map: HashMap<&str, bool> = self.all_projects.projects.iter()
+            .filter(|p| !p.archived)
+            .flat_map(|p| p.tasks.iter())
+            .map(|t| (t.name.as_str(), t.create_note))
+            .collect();
+
+        let todo_section = if self.all_projects.todo_list.is_empty() {
+            None
+        } else {
+            let mut lines = vec!["## Todo".to_string()];
+            for item in &self.all_projects.todo_list {
+                let label = match note_task_map.get(item.text.as_str()) {
+                    Some(true) => format!("[[{}]]", sanitize_filename(&item.text)),
+                    _ => item.text.clone(),
+                };
+                let check = if item.completed { "x" } else { " " };
+                lines.push(format!("- [{}] {}", check, label));
+            }
+            Some(lines.join("\n"))
+        };
+
+        let overview_section = if sections.is_empty() {
+            None
+        } else {
+            let mut lines = vec!["## Overview".to_string()];
+            lines.push(sections.join("\n\n"));
+            Some(lines.join("\n\n"))
+        };
+
+        let mut all_sections = vec![];
+        if let Some(todo) = todo_section {
+            all_sections.push(todo);
+            if overview_section.is_some() {
+                all_sections.push("---".to_string());
+            }
+        }
+        if let Some(overview) = overview_section { all_sections.push(overview); }
+
+        let content = if all_sections.is_empty() {
             format!("# Daily Note - {}\n\nNo WIP tasks today.\n", today)
         } else {
-            format!("# Daily Note - {}\n\n{}\n", today, sections.join("\n\n"))
+            format!("# Daily Note - {}\n\n{}\n", today, all_sections.join("\n\n"))
         };
 
         let filename = format!("{}.md", today);
