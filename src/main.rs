@@ -29,7 +29,6 @@ struct Task {
     progress: u8,
     dependencies: Vec<u32>,
     manual_start_date: Option<NaiveDate>,
-    details: Option<String>,
     parent_id: Option<u32>,
     #[serde(default)]
     create_note: bool,
@@ -234,9 +233,7 @@ struct App {
     history: Vec<HistoryState>,
     redo_history: Vec<HistoryState>,
     current_file_path: String, // Always "projects.json"
-    details_view_open: bool,
     todo_list_open: bool,
-    details_buffer: String,
     highlight_mode: HighlightMode,
     is_dirty: bool,
     quit_pending: bool,
@@ -300,9 +297,7 @@ impl App {
             history: vec![],
             redo_history: vec![],
             current_file_path: file_path_str.clone(),
-            details_view_open: false,
             todo_list_open: false,
-            details_buffer: String::new(),
             highlight_mode: HighlightMode::Today,
             is_dirty: false,
             quit_pending: false,
@@ -368,8 +363,8 @@ impl App {
             archived: false,
             obsidian_path: None,
         };
-        default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, details: None, parent_id: None, create_note: false, start_date: None, end_date: None });
-        default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, details: None, parent_id: None, create_note: false, start_date: None, end_date: None });
+        default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, parent_id: None, create_note: false, start_date: None, end_date: None });
+        default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, parent_id: None, create_note: false, start_date: None, end_date: None });
         
         self.all_projects.projects.push(default_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
@@ -1335,7 +1330,7 @@ impl App {
             progress: 0,
             dependencies: vec![],
             manual_start_date: None,
-            details: None,
+
             parent_id: None, // Top-level
             create_note: false,
             start_date: None,
@@ -1379,7 +1374,7 @@ impl App {
             progress: 0,
             dependencies: vec![],
             manual_start_date: parent_start_date,
-            details: None,
+
             parent_id: parent_id_for_new_task,
             create_note: false,
             start_date: None,
@@ -2026,7 +2021,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     progress: 0, 
                     dependencies: vec![], 
                     manual_start_date: parent_start_date, 
-                    details: None,
+        
                     parent_id: Some(parent_id),
                     create_note: false,
                     start_date: None,
@@ -2100,21 +2095,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 app.clear_completed_todo_items();
             } else {
                 app.add_new_project();
-            }
-        },
-        KeyCode::Char('M') => {
-            if let Some(selected_index) = app.table_state.selected() {
-                app.details_view_open = !app.details_view_open;
-                if app.details_view_open {
-                    let task = &app.get_current_project().tasks[selected_index];
-                    app.details_buffer = task.details.clone().unwrap_or_default();
-                    app.input_mode = InputMode::Editing;
-                } else {
-                    let buffer = app.details_buffer.clone();
-                    let task = &mut app.get_current_project_mut().tasks[selected_index];
-                    task.details = if buffer.is_empty() { None } else { Some(buffer) };
-                    app.input_mode = InputMode::Normal;
-                }
             }
         },
         KeyCode::Char('O') => {
@@ -2239,42 +2219,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_editing_mode(app: &mut App, key: KeyEvent) {
-    if app.details_view_open {
-        match key.code {
-            KeyCode::Enter => {
-                if key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL | KeyModifiers::ALT) {
-                    app.details_buffer.push('\n');
-                } else {
-                    if let Some(selected_index) = app.table_state.selected() {
-                        let buffer = app.details_buffer.clone();
-                        let task = &mut app.get_current_project_mut().tasks[selected_index];
-                        task.details = if buffer.is_empty() { None } else { Some(buffer) };
-                    }
-                    app.details_view_open = false;
-                    app.input_mode = InputMode::Normal;
-                }
-            }
-            KeyCode::Esc => {
-                app.details_view_open = false;
-                app.input_mode = InputMode::Normal;
-            }
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT => {
-                app.details_buffer.push(c);
-            }
-            KeyCode::Backspace => {
-                app.details_buffer.pop();
-            }
-            KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
-                let buffer = &mut app.details_buffer;
-                let last_word_start = buffer.trim_end_matches(|c: char| c.is_whitespace())
-                    .rfind(|c: char| c.is_whitespace())
-                    .map_or(0, |i| i + 1);
-                buffer.truncate(last_word_start);
-            }
-            _ => {}
-        }
-        return;
-    }
 
     // Handle scheduled event field editing (multi-step)
     if app.scheduled_events_open && app.editing_event_field.is_some() {
@@ -2885,32 +2829,13 @@ fn calculate_column_widths(app: &App) -> [u16; 8] {
 
 // --- UI RENDERING ---
 fn ui(frame: &mut Frame, app: &mut App) {
-    let details_height = if app.details_view_open {
-        let lines = app.details_buffer.split('\n').count();
-        (lines as u16 + 2).min(frame.area().height / 2).max(3)
-    } else {
-        0
-    };
-
-    let main_layout = if app.details_view_open {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(details_height),
-                Constraint::Length(3), // Footer height
-            ])
-            .split(frame.area())
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(3)])
-            .split(frame.area())
-    };
+    let main_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(frame.area());
 
     let content_area = main_layout[0];
-    let footer_area = if app.details_view_open { main_layout[2] } else { main_layout[1] };
-    let details_area = if app.details_view_open { Some(main_layout[1]) } else { None };
+    let footer_area = main_layout[1];
 
 
     let total_width = content_area.width;
@@ -2933,27 +2858,11 @@ fn ui(frame: &mut Frame, app: &mut App) {
     render_task_table(frame, table_area, app, &column_widths);
     render_gantt_chart(frame, main_chunks[1], app);
 
-    if let Some(details_area) = details_area {
-        render_details_view(frame, details_area, app);
-    }
-
     render_footer(frame, footer_area, app);
 
     if let InputMode::Editing = app.input_mode {
         if app.editing_event_field.is_some() {
             // Cursor is shown inside the scheduled events popup; hide it from the main panel
-        } else if app.details_view_open {
-            if let Some(details_area) = details_area {
-                let lines: Vec<&str> = app.details_buffer.split('\n').collect();
-                let last_line = lines.last().copied().unwrap_or("");
-                let y_offset = lines.len().saturating_sub(1) as u16;
-                let x_offset = UnicodeWidthStr::width(last_line) as u16;
-                
-                frame.set_cursor_position((
-                    details_area.x + 1 + x_offset,
-                    details_area.y + 1 + y_offset,
-                ));
-            }
         } else {
             match app.focus_area {
                 FocusArea::Project(field) => {
@@ -3491,11 +3400,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
             .join(", ");
         
         let display_id_str = display_ids.get(&task.id).cloned().unwrap_or_else(|| task.id.to_string());
-        let id_cell = if task.details.is_some() {
-            Cell::from(format!(" {}*", display_id_str))
-        } else {
-            Cell::from(format!(" {}", display_id_str))
-        };
+        let id_cell = Cell::from(format!(" {}", display_id_str));
 
         let note_prefix = if task.create_note { "[N] " } else { "" };
         let name_display = format!("{}{}{}", indent, note_prefix, task.name);
@@ -3549,16 +3454,6 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
     frame.render_stateful_widget(table, tasks_area, &mut app.table_state);
 }
 
-fn render_details_view(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().title("Task Details (Shift+Enter: New Line, Enter: Save)").borders(Borders::ALL);
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let text = app.details_buffer.clone();
-    let paragraph = Paragraph::new(text);
-
-    frame.render_widget(paragraph, inner_area);
-}
 
 fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default().title("Gantt Chart Timeline").borders(Borders::ALL);
@@ -3881,7 +3776,6 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from("  D                Delete task"),
         Line::from("  Enter            Edit selected field"),
         Line::from("  > / <            Indent/unindent task"),
-        Line::from("  M                Toggle details view"),
         Line::from("  K/J              Move task up/down"),
         Line::from(""),
         Line::from(Span::styled("TODO LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),

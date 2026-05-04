@@ -1,0 +1,1 @@
+Since now the gantt app is closely integrated with obsidian, maybe we can trim out a few of its original functions, e.g. notes for each task. Any other thoughts?
