@@ -31,6 +31,8 @@ struct Task {
     manual_start_date: Option<NaiveDate>,
     details: Option<String>,
     parent_id: Option<u32>,
+    #[serde(default)]
+    create_note: bool,
     #[serde(skip)]
     start_date: Option<NaiveDate>,
     #[serde(skip)]
@@ -48,7 +50,7 @@ struct ProjectData {
     #[serde(default)]
     archived: bool,
     #[serde(default)]
-    markwhen_export_path: Option<String>,
+    obsidian_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -186,7 +188,7 @@ enum ProjectField {
     Name,
     StartDate,
     EndDate,
-    DayOffset,
+    ObsidianPath,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -360,10 +362,10 @@ impl App {
             day_offset: 0,
             tasks: vec![],
             archived: false,
-            markwhen_export_path: None,
+            obsidian_path: None,
         };
-        default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, details: None, parent_id: None, start_date: None, end_date: None });
-        default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, details: None, parent_id: None, start_date: None, end_date: None });
+        default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, details: None, parent_id: None, create_note: false, start_date: None, end_date: None });
+        default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, details: None, parent_id: None, create_note: false, start_date: None, end_date: None });
         
         self.all_projects.projects.push(default_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
@@ -382,7 +384,7 @@ impl App {
             day_offset: 0,
             tasks: vec![],
             archived: false,
-            markwhen_export_path: None,
+            obsidian_path: None,
         };
         self.all_projects.projects.push(new_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
@@ -596,7 +598,7 @@ impl App {
                             new_selected_index = Some(current_project.tasks.len() - 1);
                         } else if current_project.tasks.is_empty() {
                             new_selected_index = None;
-                            new_focus_area = FocusArea::Project(ProjectField::DayOffset);
+                            new_focus_area = FocusArea::Project(ProjectField::ObsidianPath);
                         } else if selected_index < current_project.tasks.len() {
                             new_selected_index = Some(selected_index);
                         } else if current_project.tasks.len() > 0 {
@@ -768,26 +770,34 @@ impl App {
         let home = std::env::var("HOME").unwrap_or_default();
         let mut count = 0;
         for project in &self.all_projects.projects {
-            let raw_path = match &project.markwhen_export_path {
-                Some(p) if !p.trim().is_empty() => p.clone(),
-                _ => continue,
-            };
-            let expanded = if raw_path.starts_with("~/") {
-                format!("{}/{}", home, &raw_path[2..])
-            } else {
-                raw_path.clone()
-            };
-            let path = std::path::Path::new(&expanded);
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    fs::create_dir_all(parent)?;
+            if let Some(raw_obs) = &project.obsidian_path {
+                if !raw_obs.trim().is_empty() {
+                    let expanded = if raw_obs.starts_with("~/") {
+                        format!("{}/{}", home, &raw_obs[2..])
+                    } else {
+                        raw_obs.clone()
+                    };
+                    let obs_dir = std::path::Path::new(&expanded);
+                    fs::create_dir_all(obs_dir)?;
+                    let mut project_clone = project.clone();
+                    compute_dates_for_project(&mut project_clone);
+                    // Touch note files for each task that has create_note enabled
+                    for task in &project_clone.tasks {
+                        if !task.create_note { continue; }
+                        let safe_name = sanitize_filename(&task.name);
+                        let note_path = obs_dir.join(format!("{}.md", safe_name));
+                        if !note_path.exists() {
+                            fs::write(&note_path, "")?;
+                        }
+                    }
+                    // Write gantt markwhen file with wiki links
+                    let safe_project = sanitize_filename(&project_clone.project_name);
+                    let mw_path = obs_dir.join(format!("_gantt_{}.mw", safe_project));
+                    let content = generate_markwhen_content(&project_clone, self.today);
+                    fs::write(&mw_path, content)?;
+                    count += 1;
                 }
             }
-            let mut project_clone = project.clone();
-            compute_dates_for_project(&mut project_clone);
-            let content = generate_markwhen_content(&project_clone, self.today);
-            fs::write(path, content)?;
-            count += 1;
         }
         Ok(count)
     }
@@ -1167,6 +1177,7 @@ impl App {
             manual_start_date: None,
             details: None,
             parent_id: None, // Top-level
+            create_note: false,
             start_date: None,
             end_date: None,
         };
@@ -1210,6 +1221,7 @@ impl App {
             manual_start_date: parent_start_date,
             details: None,
             parent_id: parent_id_for_new_task,
+            create_note: false,
             start_date: None,
             end_date: None,
         };
@@ -1373,6 +1385,14 @@ fn compute_dates_for_project(project: &mut ProjectData) {
     }
 }
 
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 fn generate_markwhen_content(project: &ProjectData, today: NaiveDate) -> String {
     let task_map: HashMap<u32, &Task> = project.tasks.iter().map(|t| (t.id, t)).collect();
     let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -1386,12 +1406,19 @@ fn generate_markwhen_content(project: &ProjectData, today: NaiveDate) -> String 
     fn progress_tag(p: u8, start: NaiveDate, end: NaiveDate, today: NaiveDate) -> &'static str {
         if p == 100 { " #done" } else if p > 0 || (today >= start && today <= end) { " #wip" } else { "" }
     }
-    fn task_line(task: &Task, indent: &str, today: NaiveDate) -> String {
-        match (task.start_date, task.end_date) {
-            (Some(s), Some(e)) => format!("{}{}/{}: {}{}", indent, s, e, task.name, progress_tag(task.progress, s, e, today)),
-            _ => format!("{}// (no dates): {}", indent, task.name),
+    let task_label = |task: &Task| -> String {
+        if task.create_note {
+            format!("[[{}]]", sanitize_filename(&task.name))
+        } else {
+            task.name.clone()
         }
-    }
+    };
+    let task_line = |task: &Task, indent: &str| -> String {
+        match (task.start_date, task.end_date) {
+            (Some(s), Some(e)) => format!("{}{}/{}: {}{}", indent, s, e, task_label(task), progress_tag(task.progress, s, e, today)),
+            _ => format!("{}// (no dates): {}", indent, task_label(task)),
+        }
+    };
 
     let end_str = project.project_end_date
         .map_or_else(|| "ongoing".to_string(), |d| d.to_string());
@@ -1408,26 +1435,26 @@ fn generate_markwhen_content(project: &ProjectData, today: NaiveDate) -> String 
     for parent in &top_level {
         let kids = children_map.get(&parent.id).map(|v| v.as_slice()).unwrap_or(&[]);
         if !kids.is_empty() {
-            lines.push(format!("group {}", parent.name));
+            lines.push(format!("group {}", task_label(parent)));
             for &kid_id in kids {
                 if let Some(kid) = task_map.get(&kid_id) {
                     let grandkids = children_map.get(&kid_id).map(|v| v.as_slice()).unwrap_or(&[]);
                     if !grandkids.is_empty() {
-                        lines.push(format!("  group {}", kid.name));
+                        lines.push(format!("  group {}", task_label(kid)));
                         for &gc_id in grandkids {
                             if let Some(gc) = task_map.get(&gc_id) {
-                                lines.push(task_line(gc, "    ", today));
+                                lines.push(task_line(gc, "    "));
                             }
                         }
                         lines.push("  endGroup".to_string());
                     } else {
-                        lines.push(task_line(kid, "  ", today));
+                        lines.push(task_line(kid, "  "));
                     }
                 }
             }
             lines.push("endGroup".to_string());
         } else {
-            lines.push(task_line(parent, "", today));
+            lines.push(task_line(parent, ""));
         }
         lines.push("".to_string());
     }
@@ -1657,7 +1684,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             KeyCode::Char('f') => app.push_todo_to_phone(),
             KeyCode::Char('e') => {
                 match app.export_to_markwhen() {
-                    Ok(0) => app.status_message = "No markwhen export paths configured in projects.json.".to_string(),
+                    Ok(0) => app.status_message = "No export paths configured (Export or Obsidian fields).".to_string(),
                     Ok(n) => app.status_message = format!("Exported {} markwhen file(s).", n),
                     Err(e) => app.status_message = format!("Export failed: {}", e),
                 }
@@ -1833,10 +1860,11 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     progress: 0, 
                     dependencies: vec![], 
                     manual_start_date: parent_start_date, 
-                    details: None, 
-                    parent_id: Some(parent_id), 
-                    start_date: None, 
-                    end_date: None 
+                    details: None,
+                    parent_id: Some(parent_id),
+                    create_note: false,
+                    start_date: None,
+                    end_date: None
                 });
                 app.table_state.select(Some(new_task_index));
                 app.focus_area = FocusArea::Tasks;
@@ -1850,6 +1878,15 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             load_buffer_for_editing(app);
         }
         KeyCode::Char('D') => app.delete_selected_task(),
+        KeyCode::Char('n') => {
+            if let Some(idx) = app.table_state.selected() {
+                app.save_state_for_undo();
+                let task = &mut app.get_current_project_mut().tasks[idx];
+                task.create_note = !task.create_note;
+                let status = if task.create_note { "enabled" } else { "disabled" };
+                app.status_message = format!("Note attachment {}.", status);
+            }
+        }
         KeyCode::Char('u') => app.undo(),
         KeyCode::Char('t') => {
             let today_date = app.today; // Capture app.today before mutable borrow
@@ -2180,7 +2217,7 @@ fn handle_editing_mode(app: &mut App, key: KeyEvent) {
 // --- STATE HELPERS ---
 fn navigate_up(app: &mut App) {
     match app.focus_area {
-        FocusArea::Project(ProjectField::DayOffset) => app.focus_area = FocusArea::Project(ProjectField::EndDate),
+        FocusArea::Project(ProjectField::ObsidianPath) => app.focus_area = FocusArea::Project(ProjectField::EndDate),
         FocusArea::Project(ProjectField::EndDate) => app.focus_area = FocusArea::Project(ProjectField::StartDate),
         FocusArea::Project(ProjectField::StartDate) => app.focus_area = FocusArea::Project(ProjectField::Name),
         FocusArea::Project(ProjectField::Name) => {}
@@ -2188,7 +2225,7 @@ fn navigate_up(app: &mut App) {
             if let Some(selected) = app.table_state.selected() {
                 if selected == 0 {
                     app.table_state.select(None);
-                    app.focus_area = FocusArea::Project(ProjectField::DayOffset);
+                    app.focus_area = FocusArea::Project(ProjectField::ObsidianPath);
                 } else {
                     app.table_state.select(Some(selected - 1));
                 }
@@ -2216,7 +2253,7 @@ fn navigate_up(app: &mut App) {
                 app.focus_area = FocusArea::Tasks;
                 app.table_state.select(Some(app.get_current_project().tasks.len() - 1));
             } else {
-                app.focus_area = FocusArea::Project(ProjectField::DayOffset);
+                app.focus_area = FocusArea::Project(ProjectField::ObsidianPath);
             }
         }
     }
@@ -2226,8 +2263,8 @@ fn navigate_down(app: &mut App) {
     match app.focus_area {
         FocusArea::Project(ProjectField::Name) => app.focus_area = FocusArea::Project(ProjectField::StartDate),
         FocusArea::Project(ProjectField::StartDate) => app.focus_area = FocusArea::Project(ProjectField::EndDate),
-        FocusArea::Project(ProjectField::EndDate) => app.focus_area = FocusArea::Project(ProjectField::DayOffset),
-        FocusArea::Project(ProjectField::DayOffset) => {
+        FocusArea::Project(ProjectField::EndDate) => app.focus_area = FocusArea::Project(ProjectField::ObsidianPath),
+        FocusArea::Project(ProjectField::ObsidianPath) => {
             if !app.get_current_project().tasks.is_empty() {
                 app.focus_area = FocusArea::Tasks;
                 app.table_state.select(Some(0));
@@ -2330,7 +2367,7 @@ fn load_buffer_for_editing(app: &mut App) {
         FocusArea::Project(ProjectField::Name) => app.input_buffer = current_project.project_name.clone(),
         FocusArea::Project(ProjectField::StartDate) => app.input_buffer = current_project.project_start_date.format("%m/%d/%y").to_string(),
         FocusArea::Project(ProjectField::EndDate) => app.input_buffer = current_project.project_end_date.map_or_else(|| "".to_string(), |d| d.format("%m/%d/%y").to_string()),
-        FocusArea::Project(ProjectField::DayOffset) => app.input_buffer = current_project.markwhen_export_path.clone().unwrap_or_default(),
+        FocusArea::Project(ProjectField::ObsidianPath) => app.input_buffer = current_project.obsidian_path.clone().unwrap_or_default(),
         FocusArea::Tasks => {
             if let Some(index) = app.table_state.selected() {
                 let task = &current_project.tasks[index];
@@ -2403,8 +2440,8 @@ fn save_buffer_to_task(app: &mut App) {
                         app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
                     }
                 }
-                ProjectField::DayOffset => {
-                    current_project.markwhen_export_path = if input_buffer_owned.trim().is_empty() {
+                ProjectField::ObsidianPath => {
+                    current_project.obsidian_path = if input_buffer_owned.trim().is_empty() {
                         None
                     } else {
                         Some(input_buffer_owned.trim().to_string())
@@ -2740,13 +2777,13 @@ fn ui(frame: &mut Frame, app: &mut App) {
                     let y_offset = match field {
                         ProjectField::Name => 1,
                         ProjectField::StartDate | ProjectField::EndDate => 2,
-                        ProjectField::DayOffset => 3,
+                        ProjectField::ObsidianPath => 3,
                     };
                     let x_offset = match field {
                         ProjectField::Name => "Project: ".len(),
                         ProjectField::StartDate => "Start Date: ".len(),
                         ProjectField::EndDate => "Start Date: YYYY/MM/DD | End Date: ".len(),
-                        ProjectField::DayOffset => "Export: ".len(),
+                        ProjectField::ObsidianPath => "Obsidian: ".len(),
                     };
                     frame.set_cursor_position(
                         (table_area.x + 1 + (x_offset + app.input_buffer.len()) as u16,
@@ -3111,7 +3148,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         .constraints([
             Constraint::Length(1), // Project Name
             Constraint::Length(1), // Project Start/End Date
-            Constraint::Length(1), // Export Path
+            Constraint::Length(1), // Obsidian Path
             Constraint::Length(1), // Header
             Constraint::Min(0),    // Tasks
         ])
@@ -3120,21 +3157,21 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
     let name_style = if app.focus_area == FocusArea::Project(ProjectField::Name) { Style::default().bg(Color::Blue) } else { Style::default() };
     let start_date_style = if app.focus_area == FocusArea::Project(ProjectField::StartDate) { Style::default().bg(Color::Blue) } else { Style::default() };
     let end_date_style = if app.focus_area == FocusArea::Project(ProjectField::EndDate) { Style::default().bg(Color::Blue) } else { Style::default() };
-    let day_offset_style = if app.focus_area == FocusArea::Project(ProjectField::DayOffset) { Style::default().bg(Color::Blue) } else { Style::default() };
-    
+    let obsidian_style = if app.focus_area == FocusArea::Project(ProjectField::ObsidianPath) { Style::default().bg(Color::Blue) } else { Style::default() };
+
     let name_text = if app.focus_area == FocusArea::Project(ProjectField::Name) && app.input_mode == InputMode::Editing { &app.input_buffer } else { &current_project.project_name };
     let start_date_text = if app.focus_area == FocusArea::Project(ProjectField::StartDate) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.project_start_date.format("%m/%d/%y").to_string() };
-    
+
     let end_date_text = if app.focus_area == FocusArea::Project(ProjectField::EndDate) && app.input_mode == InputMode::Editing {
         app.input_buffer.clone()
     } else {
         current_project.project_end_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%y").to_string())
     };
 
-    let export_path_text = if app.focus_area == FocusArea::Project(ProjectField::DayOffset) && app.input_mode == InputMode::Editing {
+    let obsidian_path_text = if app.focus_area == FocusArea::Project(ProjectField::ObsidianPath) && app.input_mode == InputMode::Editing {
         app.input_buffer.clone()
     } else {
-        current_project.markwhen_export_path.clone().unwrap_or_else(|| "-".to_string())
+        current_project.obsidian_path.clone().unwrap_or_else(|| "-".to_string())
     };
 
     let archived_count = app.all_projects.projects.iter().filter(|p| p.archived).count();
@@ -3150,7 +3187,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         Span::raw(" | "),
         Span::styled(format!("End Date: {}", end_date_text), end_date_style),
     ])), layout[1]);
-    frame.render_widget(Paragraph::new(format!("Export: {}", export_path_text)).style(day_offset_style), layout[2]);
+    frame.render_widget(Paragraph::new(format!("Obsidian: {}", obsidian_path_text)).style(obsidian_style), layout[2]);
 
     let header_area = layout[3];
     let tasks_area = layout[4];
@@ -3264,7 +3301,8 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
             Cell::from(format!(" {}", display_id_str))
         };
 
-        let name_display = format!("{}{}", indent, task.name);
+        let note_prefix = if task.create_note { "[N] " } else { "" };
+        let name_display = format!("{}{}{}", indent, note_prefix, task.name);
 
         let cells_data = vec![
             (TaskField::Name, name_display),
