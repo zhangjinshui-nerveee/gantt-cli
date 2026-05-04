@@ -4,3 +4,6 @@
 - interactive: navigation and moving up/down
 - how to add: on selected task in the project panel, press + to add to the todo list
 - how to remove: on selected task in the todo list panel, press - to remove from the todo list
+
+
+For each project, set an input to put the markwhen path for the export. Export all projects when save projects. Skip the export if the export path is invalid or empty.

@@ -47,6 +47,8 @@ struct ProjectData {
     tasks: Vec<Task>,
     #[serde(default)]
     archived: bool,
+    #[serde(default)]
+    markwhen_export_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -358,6 +360,7 @@ impl App {
             day_offset: 0,
             tasks: vec![],
             archived: false,
+            markwhen_export_path: None,
         };
         default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, details: None, parent_id: None, start_date: None, end_date: None });
         default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, details: None, parent_id: None, start_date: None, end_date: None });
@@ -379,6 +382,7 @@ impl App {
             day_offset: 0,
             tasks: vec![],
             archived: false,
+            markwhen_export_path: None,
         };
         self.all_projects.projects.push(new_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
@@ -702,101 +706,41 @@ impl App {
     fn recalculate_schedule(&mut self) {
         let next_id = self.get_current_project().tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
         self.next_task_id = next_id;
+
+        compute_dates_for_project(self.get_current_project_mut());
+
+        // Update parent task durations to span their children
         let current_project = self.get_current_project_mut();
-        let task_map: HashMap<u32, Task> = current_project.tasks.iter().map(|t| (t.id, t.clone())).collect();
-        let mut calculated_tasks: HashMap<u32, Task> = HashMap::new();
-        let mut tasks_to_process: Vec<u32> = current_project.tasks.iter().map(|t| t.id).collect();
-        
-        let mut iterations = 0;
-        while !tasks_to_process.is_empty() && iterations < 100 {
-            tasks_to_process.retain(|task_id| {
-                let task = task_map.get(task_id).unwrap();
-                let deps_calculated = task.dependencies.iter().all(|dep_id| calculated_tasks.contains_key(dep_id) || !task_map.contains_key(dep_id));
-
-                if deps_calculated {
-                    let mut updated_task = task.clone();
-                    if !task.dependencies.is_empty() {
-                        let max_dep_end_date = task.dependencies.iter()
-                            .filter_map(|dep_id| calculated_tasks.get(dep_id))
-                            .filter_map(|dep| dep.end_date)
-                            .max();
-                        updated_task.start_date = Some(max_dep_end_date.map_or(current_project.project_start_date, |d| d + Duration::days(1)));
-                    } else if let Some(manual_date) = task.manual_start_date {
-                        updated_task.start_date = Some(manual_date);
-                    } else {
-                        updated_task.start_date = Some(current_project.project_start_date);
-                    }
-                    updated_task.end_date = updated_task.start_date.map(|d| d + Duration::days(updated_task.duration.max(1) - 1));
-                    calculated_tasks.insert(*task_id, updated_task);
-                    false
-                } else { true }
-            });
-            iterations += 1;
-        }
-
-        let has_cycle = !tasks_to_process.is_empty();
-
-        for task in &mut current_project.tasks {
-            if let Some(calculated) = calculated_tasks.get(&task.id) {
-                task.start_date = calculated.start_date;
-                task.end_date = calculated.end_date;
-            } else {
-                task.start_date = None;
-                task.end_date = None;
-            }
-        }
-
-        // Second pass: adjust parent tasks based on their children
-        // Build a map of parent_id -> children
         let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
         for task in &current_project.tasks {
-            if let Some(parent_id) = task.parent_id {
-                children_map.entry(parent_id).or_default().push(task.id);
+            if let Some(pid) = task.parent_id {
+                children_map.entry(pid).or_default().push(task.id);
             }
         }
-
-        // Find the depth of each task in the hierarchy (for processing order)
-        fn get_depth(task_id: u32, tasks: &[Task]) -> usize {
-            let task = tasks.iter().find(|t| t.id == task_id);
-            match task.and_then(|t| t.parent_id) {
-                Some(parent_id) => 1 + get_depth(parent_id, tasks),
-                None => 0,
-            }
-        }
-
-        // Get all parent task IDs sorted by depth (deepest first)
-        let mut parent_ids: Vec<u32> = children_map.keys().copied().collect();
-        parent_ids.sort_by(|a, b| {
-            let depth_a = get_depth(*a, &current_project.tasks);
-            let depth_b = get_depth(*b, &current_project.tasks);
-            depth_b.cmp(&depth_a) // Sort descending (deepest first)
-        });
-
-        // Adjust each parent based on its children
-        for parent_id in parent_ids {
-            if let Some(child_ids) = children_map.get(&parent_id) {
-                let children_start_dates: Vec<NaiveDate> = child_ids.iter()
+        let parent_ids: Vec<u32> = children_map.keys().copied().collect();
+        for pid in parent_ids {
+            if let Some(child_ids) = children_map.get(&pid) {
+                let starts: Vec<NaiveDate> = child_ids.iter()
                     .filter_map(|id| current_project.tasks.iter().find(|t| t.id == *id))
                     .filter_map(|t| t.start_date)
                     .collect();
-                let children_end_dates: Vec<NaiveDate> = child_ids.iter()
+                let ends: Vec<NaiveDate> = child_ids.iter()
                     .filter_map(|id| current_project.tasks.iter().find(|t| t.id == *id))
                     .filter_map(|t| t.end_date)
                     .collect();
-
-                if !children_start_dates.is_empty() && !children_end_dates.is_empty() {
-                    let min_start = children_start_dates.into_iter().min().unwrap();
-                    let max_end = children_end_dates.into_iter().max().unwrap();
-
-                    if let Some(parent_task) = current_project.tasks.iter_mut().find(|t| t.id == parent_id) {
-                        parent_task.start_date = Some(min_start);
-                        parent_task.end_date = Some(max_end);
-                        parent_task.duration = (max_end - min_start).num_days() + 1;
+                if !starts.is_empty() && !ends.is_empty() {
+                    let min_start = starts.into_iter().min().unwrap();
+                    let max_end = ends.into_iter().max().unwrap();
+                    if let Some(parent) = current_project.tasks.iter_mut().find(|t| t.id == pid) {
+                        parent.duration = (max_end - min_start).num_days() + 1;
                     }
                 }
             }
         }
 
+        let has_cycle = current_project.tasks.iter()
+            .filter(|t| !t.dependencies.is_empty())
+            .any(|t| t.start_date.is_none());
         if has_cycle {
             self.status_message = "Warning: circular dependency detected — some tasks could not be scheduled.".to_string();
         }
@@ -807,11 +751,45 @@ impl App {
         let json_data = serde_json::to_string_pretty(&self.all_projects)?;
         fs::write(&self.current_file_path, json_data)?;
         self.file_mtime = fs::metadata(&self.current_file_path).and_then(|m| m.modified()).ok();
-        self.status_message = format!("All projects saved successfully to {}!", self.current_file_path);
         self.is_dirty = false;
         self.quit_pending = false;
         self.save_conflict_pending = false;
+
+        let exported = self.export_to_markwhen();
+        self.status_message = match exported {
+            Ok(0) => format!("Saved to {}.", self.current_file_path),
+            Ok(n) => format!("Saved to {}. Exported {} markwhen file(s).", self.current_file_path, n),
+            Err(e) => format!("Saved, but markwhen export failed: {}", e),
+        };
         Ok(())
+    }
+
+    fn export_to_markwhen(&self) -> io::Result<usize> {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let mut count = 0;
+        for project in &self.all_projects.projects {
+            let raw_path = match &project.markwhen_export_path {
+                Some(p) if !p.trim().is_empty() => p.clone(),
+                _ => continue,
+            };
+            let expanded = if raw_path.starts_with("~/") {
+                format!("{}/{}", home, &raw_path[2..])
+            } else {
+                raw_path.clone()
+            };
+            let path = std::path::Path::new(&expanded);
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    fs::create_dir_all(parent)?;
+                }
+            }
+            let mut project_clone = project.clone();
+            compute_dates_for_project(&mut project_clone);
+            let content = generate_markwhen_content(&project_clone, self.today);
+            fs::write(path, content)?;
+            count += 1;
+        }
+        Ok(count)
     }
 
     fn load_all_projects(&mut self) -> io::Result<()> {
@@ -1306,6 +1284,157 @@ impl App {
     }
 }
 
+// --- MARKWHEN EXPORT ---
+
+fn compute_dates_for_project(project: &mut ProjectData) {
+    let task_map: HashMap<u32, Task> = project.tasks.iter().map(|t| (t.id, t.clone())).collect();
+    let mut calculated: HashMap<u32, Task> = HashMap::new();
+    let mut remaining: Vec<u32> = project.tasks.iter().map(|t| t.id).collect();
+
+    let mut iterations = 0;
+    while !remaining.is_empty() && iterations < 100 {
+        remaining.retain(|task_id| {
+            let task = task_map.get(task_id).unwrap();
+            let deps_ready = task.dependencies.iter()
+                .all(|dep| calculated.contains_key(dep) || !task_map.contains_key(dep));
+            if deps_ready {
+                let mut updated = task.clone();
+                if !task.dependencies.is_empty() {
+                    let max_dep_end = task.dependencies.iter()
+                        .filter_map(|dep| calculated.get(dep))
+                        .filter_map(|dep| dep.end_date)
+                        .max();
+                    updated.start_date = Some(max_dep_end
+                        .map_or(project.project_start_date, |d| d + Duration::days(1)));
+                } else if let Some(manual) = task.manual_start_date {
+                    updated.start_date = Some(manual);
+                } else {
+                    updated.start_date = Some(project.project_start_date);
+                }
+                updated.end_date = updated.start_date.map(|d| d + Duration::days(updated.duration.max(1) - 1));
+                calculated.insert(*task_id, updated);
+                false
+            } else {
+                true
+            }
+        });
+        iterations += 1;
+    }
+
+    for task in &mut project.tasks {
+        if let Some(c) = calculated.get(&task.id) {
+            task.start_date = c.start_date;
+            task.end_date = c.end_date;
+        } else {
+            task.start_date = None;
+            task.end_date = None;
+        }
+    }
+
+    // Second pass: parent spans its children
+    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+    for task in &project.tasks {
+        if let Some(pid) = task.parent_id {
+            children_map.entry(pid).or_default().push(task.id);
+        }
+    }
+
+    fn get_depth(task_id: u32, tasks: &[Task]) -> usize {
+        match tasks.iter().find(|t| t.id == task_id).and_then(|t| t.parent_id) {
+            Some(pid) => 1 + get_depth(pid, tasks),
+            None => 0,
+        }
+    }
+
+    let mut parent_ids: Vec<u32> = children_map.keys().copied().collect();
+    parent_ids.sort_by(|a, b| {
+        get_depth(*b, &project.tasks).cmp(&get_depth(*a, &project.tasks))
+    });
+
+    for pid in parent_ids {
+        if let Some(child_ids) = children_map.get(&pid) {
+            let starts: Vec<NaiveDate> = child_ids.iter()
+                .filter_map(|id| project.tasks.iter().find(|t| t.id == *id))
+                .filter_map(|t| t.start_date)
+                .collect();
+            let ends: Vec<NaiveDate> = child_ids.iter()
+                .filter_map(|id| project.tasks.iter().find(|t| t.id == *id))
+                .filter_map(|t| t.end_date)
+                .collect();
+            if !starts.is_empty() && !ends.is_empty() {
+                let min_start = starts.into_iter().min().unwrap();
+                let max_end = ends.into_iter().max().unwrap();
+                if let Some(parent) = project.tasks.iter_mut().find(|t| t.id == pid) {
+                    parent.start_date = Some(min_start);
+                    parent.end_date = Some(max_end);
+                }
+            }
+        }
+    }
+}
+
+fn generate_markwhen_content(project: &ProjectData, today: NaiveDate) -> String {
+    let task_map: HashMap<u32, &Task> = project.tasks.iter().map(|t| (t.id, t)).collect();
+    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+    for task in &project.tasks {
+        if let Some(pid) = task.parent_id {
+            children_map.entry(pid).or_default().push(task.id);
+        }
+    }
+    let top_level: Vec<&Task> = project.tasks.iter().filter(|t| t.parent_id.is_none()).collect();
+
+    fn progress_tag(p: u8, start: NaiveDate, end: NaiveDate, today: NaiveDate) -> &'static str {
+        if p == 100 { " #done" } else if p > 0 || (today >= start && today <= end) { " #wip" } else { "" }
+    }
+    fn task_line(task: &Task, indent: &str, today: NaiveDate) -> String {
+        match (task.start_date, task.end_date) {
+            (Some(s), Some(e)) => format!("{}{}/{}: {}{}", indent, s, e, task.name, progress_tag(task.progress, s, e, today)),
+            _ => format!("{}// (no dates): {}", indent, task.name),
+        }
+    }
+
+    let end_str = project.project_end_date
+        .map_or_else(|| "ongoing".to_string(), |d| d.to_string());
+
+    let mut lines = vec![
+        "---".to_string(),
+        format!("title: {}", project.project_name),
+        "---".to_string(),
+        "".to_string(),
+        format!("// {} → {}", project.project_start_date, end_str),
+        "".to_string(),
+    ];
+
+    for parent in &top_level {
+        let kids = children_map.get(&parent.id).map(|v| v.as_slice()).unwrap_or(&[]);
+        if !kids.is_empty() {
+            lines.push(format!("group {}", parent.name));
+            for &kid_id in kids {
+                if let Some(kid) = task_map.get(&kid_id) {
+                    let grandkids = children_map.get(&kid_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                    if !grandkids.is_empty() {
+                        lines.push(format!("  group {}", kid.name));
+                        for &gc_id in grandkids {
+                            if let Some(gc) = task_map.get(&gc_id) {
+                                lines.push(task_line(gc, "    ", today));
+                            }
+                        }
+                        lines.push("  endGroup".to_string());
+                    } else {
+                        lines.push(task_line(kid, "  ", today));
+                    }
+                }
+            }
+            lines.push("endGroup".to_string());
+        } else {
+            lines.push(task_line(parent, "", today));
+        }
+        lines.push("".to_string());
+    }
+
+    lines.join("\n")
+}
+
 // --- MAIN ---
 fn main() -> io::Result<()> {
     setup_terminal()?;
@@ -1526,6 +1655,13 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             KeyCode::Char('n') => app.move_project_forward(),
             KeyCode::Char('p') => app.move_project_backward(),
             KeyCode::Char('f') => app.push_todo_to_phone(),
+            KeyCode::Char('e') => {
+                match app.export_to_markwhen() {
+                    Ok(0) => app.status_message = "No markwhen export paths configured in projects.json.".to_string(),
+                    Ok(n) => app.status_message = format!("Exported {} markwhen file(s).", n),
+                    Err(e) => app.status_message = format!("Export failed: {}", e),
+                }
+            },
             KeyCode::Char('b') => {
                 app.all_projects.show_archived = !app.all_projects.show_archived;
                 app.is_dirty = true;
@@ -2194,7 +2330,7 @@ fn load_buffer_for_editing(app: &mut App) {
         FocusArea::Project(ProjectField::Name) => app.input_buffer = current_project.project_name.clone(),
         FocusArea::Project(ProjectField::StartDate) => app.input_buffer = current_project.project_start_date.format("%m/%d/%y").to_string(),
         FocusArea::Project(ProjectField::EndDate) => app.input_buffer = current_project.project_end_date.map_or_else(|| "".to_string(), |d| d.format("%m/%d/%y").to_string()),
-        FocusArea::Project(ProjectField::DayOffset) => app.input_buffer = current_project.day_offset.to_string(),
+        FocusArea::Project(ProjectField::DayOffset) => app.input_buffer = current_project.markwhen_export_path.clone().unwrap_or_default(),
         FocusArea::Tasks => {
             if let Some(index) = app.table_state.selected() {
                 let task = &current_project.tasks[index];
@@ -2268,11 +2404,11 @@ fn save_buffer_to_task(app: &mut App) {
                     }
                 }
                 ProjectField::DayOffset => {
-                    if let Ok(offset) = input_buffer_owned.parse() {
-                        current_project.day_offset = offset;
+                    current_project.markwhen_export_path = if input_buffer_owned.trim().is_empty() {
+                        None
                     } else {
-                        app.status_message = "Invalid number for day offset.".to_string();
-                    }
+                        Some(input_buffer_owned.trim().to_string())
+                    };
                 }
             }
         }
@@ -2610,7 +2746,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         ProjectField::Name => "Project: ".len(),
                         ProjectField::StartDate => "Start Date: ".len(),
                         ProjectField::EndDate => "Start Date: YYYY/MM/DD | End Date: ".len(),
-                        ProjectField::DayOffset => "Day Offset: ".len(),
+                        ProjectField::DayOffset => "Export: ".len(),
                     };
                     frame.set_cursor_position(
                         (table_area.x + 1 + (x_offset + app.input_buffer.len()) as u16,
@@ -2974,8 +3110,8 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Project Name
-            Constraint::Length(1), // Project Start Date
-            Constraint::Length(1), // Week to Show
+            Constraint::Length(1), // Project Start/End Date
+            Constraint::Length(1), // Export Path
             Constraint::Length(1), // Header
             Constraint::Min(0),    // Tasks
         ])
@@ -2995,7 +3131,11 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         current_project.project_end_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%y").to_string())
     };
 
-    let day_offset_text = if app.focus_area == FocusArea::Project(ProjectField::DayOffset) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.day_offset.to_string() };
+    let export_path_text = if app.focus_area == FocusArea::Project(ProjectField::DayOffset) && app.input_mode == InputMode::Editing {
+        app.input_buffer.clone()
+    } else {
+        current_project.markwhen_export_path.clone().unwrap_or_else(|| "-".to_string())
+    };
 
     let archived_count = app.all_projects.projects.iter().filter(|p| p.archived).count();
     let archived_suffix = if archived_count > 0 && !app.all_projects.show_archived {
@@ -3010,7 +3150,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         Span::raw(" | "),
         Span::styled(format!("End Date: {}", end_date_text), end_date_style),
     ])), layout[1]);
-    frame.render_widget(Paragraph::new(format!("Day Offset: {}", day_offset_text)).style(day_offset_style), layout[2]);
+    frame.render_widget(Paragraph::new(format!("Export: {}", export_path_text)).style(day_offset_style), layout[2]);
 
     let header_area = layout[3];
     let tasks_area = layout[4];
