@@ -157,6 +157,8 @@ struct AllProjectsData {
     scheduled_events: Vec<ScheduledEvent>,
     #[serde(default)]
     show_archived: bool,
+    #[serde(default)]
+    daily_note_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -197,6 +199,7 @@ enum FocusArea {
     Tasks,
     TodoList,
     NtfyTopic,
+    DailyNotePath,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -280,6 +283,7 @@ impl App {
                 column_visibility: ColumnVisibility::default(),
                 scheduled_events: vec![],
                 show_archived: false,
+                daily_note_path: None,
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
@@ -758,6 +762,7 @@ impl App {
         self.save_conflict_pending = false;
 
         let exported = self.export_to_markwhen();
+        let _ = self.write_daily_note();
         self.status_message = match exported {
             Ok(0) => format!("Saved to {}.", self.current_file_path),
             Ok(n) => format!("Saved to {}. Exported {} markwhen file(s).", self.current_file_path, n),
@@ -816,6 +821,64 @@ impl App {
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "File not found"))
         }
+    }
+
+    fn write_daily_note(&self) -> io::Result<usize> {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let today = self.today;
+
+        let raw = match &self.all_projects.daily_note_path {
+            Some(p) if !p.trim().is_empty() => p.clone(),
+            _ => return Ok(0),
+        };
+        let expanded = if raw.starts_with("~/") {
+            format!("{}/{}", home, &raw[2..])
+        } else {
+            raw.clone()
+        };
+        let obs_paths = vec![expanded];
+
+        // Build note content: WIP tasks from all projects
+        let mut sections: Vec<String> = vec![];
+        for project in &self.all_projects.projects {
+            let mut project_clone = project.clone();
+            compute_dates_for_project(&mut project_clone);
+            let wip: Vec<&Task> = project_clone.tasks.iter().filter(|t| {
+                if t.progress == 100 { return false; }
+                let in_progress = t.progress > 0;
+                let active_today = t.start_date.map_or(false, |s| {
+                    t.end_date.map_or(false, |e| today >= s && today <= e)
+                });
+                in_progress || active_today
+            }).collect();
+            if wip.is_empty() { continue; }
+            let mut lines = vec![format!("## {}", project_clone.project_name)];
+            for task in wip {
+                let label = if task.create_note {
+                    format!("[[{}]]", sanitize_filename(&task.name))
+                } else {
+                    task.name.clone()
+                };
+                lines.push(format!("- {} ({}%)", label, task.progress));
+            }
+            sections.push(lines.join("\n"));
+        }
+
+        let content = if sections.is_empty() {
+            format!("# Daily Note - {}\n\nNo WIP tasks today.\n", today)
+        } else {
+            format!("# Daily Note - {}\n\n{}\n", today, sections.join("\n\n"))
+        };
+
+        let filename = format!("{}.md", today);
+        let mut count = 0;
+        for expanded in &obs_paths {
+            let obs_dir = std::path::Path::new(expanded);
+            fs::create_dir_all(obs_dir)?;
+            fs::write(obs_dir.join(&filename), &content)?;
+            count += 1;
+        }
+        Ok(count)
     }
 
     fn file_was_modified_externally(&self) -> bool {
@@ -1819,6 +1882,9 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     app.focus_area = FocusArea::NtfyTopic;
                 }
                 FocusArea::NtfyTopic => {
+                    app.focus_area = FocusArea::DailyNotePath;
+                }
+                FocusArea::DailyNotePath => {
                     app.focus_area = FocusArea::Project(ProjectField::Name);
                 }
             }
@@ -1826,7 +1892,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::BackTab => {
             match app.focus_area {
                 FocusArea::Project(_) => {
-                    app.focus_area = FocusArea::NtfyTopic;
+                    app.focus_area = FocusArea::DailyNotePath;
                 }
                 FocusArea::Tasks => {
                     app.focus_area = FocusArea::Project(ProjectField::Name);
@@ -1843,6 +1909,9 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     } else {
                         app.focus_area = FocusArea::Tasks;
                     }
+                }
+                FocusArea::DailyNotePath => {
+                    app.focus_area = FocusArea::NtfyTopic;
                 }
             }
         },
@@ -2010,6 +2079,10 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     }
                 }
                 FocusArea::NtfyTopic => {
+                    app.input_mode = InputMode::Editing;
+                    load_buffer_for_editing(app);
+                }
+                FocusArea::DailyNotePath => {
                     app.input_mode = InputMode::Editing;
                     load_buffer_for_editing(app);
                 }
@@ -2256,6 +2329,7 @@ fn navigate_up(app: &mut App) {
                 app.focus_area = FocusArea::Project(ProjectField::ObsidianPath);
             }
         }
+        FocusArea::DailyNotePath => {}
     }
 }
 
@@ -2299,6 +2373,7 @@ fn navigate_down(app: &mut App) {
             }
         }
         FocusArea::NtfyTopic => {}
+        FocusArea::DailyNotePath => {}
     }
 }
 
@@ -2404,6 +2479,9 @@ fn load_buffer_for_editing(app: &mut App) {
         }
         FocusArea::NtfyTopic => {
             app.input_buffer = app.all_projects.ntfy_topic.clone().unwrap_or_default();
+        }
+        FocusArea::DailyNotePath => {
+            app.input_buffer = app.all_projects.daily_note_path.clone().unwrap_or_default();
         }
     }
 }
@@ -2597,6 +2675,14 @@ fn save_buffer_to_task(app: &mut App) {
             app.all_projects.ntfy_topic = Some(input_buffer_owned);
             app.is_dirty = true;
         }
+        FocusArea::DailyNotePath => {
+            app.all_projects.daily_note_path = if input_buffer_owned.trim().is_empty() {
+                None
+            } else {
+                Some(input_buffer_owned.trim().to_string())
+            };
+            app.is_dirty = true;
+        }
     }
 }
 
@@ -2665,7 +2751,7 @@ fn calculate_column_widths(app: &App) -> [u16; 8] {
         .max().unwrap_or(0).max(UnicodeWidthStr::width("ID")) as u16 + PADDING;
 
     let name_col_width = current_project.tasks.iter()
-        .map(|t| UnicodeWidthStr::width(t.name.as_str()))
+        .map(|t| UnicodeWidthStr::width(t.name.as_str()) + if t.create_note { 4 } else { 0 })
         .max().unwrap_or(0).max(UnicodeWidthStr::width("Name")) as u16 + 12 + PADDING;
 
     let vis = &app.all_projects.column_visibility;
@@ -2867,17 +2953,30 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 }
                 FocusArea::TodoList => {}
                 FocusArea::NtfyTopic => {
-                    let layout = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([
-                            Constraint::Percentage(30),
-                            Constraint::Percentage(30),
-                            Constraint::Percentage(40),
-                        ])
+                    let footer_rows = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
                         .split(footer_area);
-                    let topic_area = layout[1];
+                    let row = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(30), Constraint::Percentage(30), Constraint::Percentage(40)])
+                        .split(footer_rows[0]);
+                    let topic_area = row[1];
                     let cursor_x = topic_area.x + "ntfy channel name: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
                     frame.set_cursor_position((cursor_x, topic_area.y));
+                }
+                FocusArea::DailyNotePath => {
+                    let footer_rows = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
+                        .split(footer_area);
+                    let row = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .split(footer_rows[1]);
+                    let dn_area = row[0];
+                    let cursor_x = dn_area.x + "daily note path: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
+                    frame.set_cursor_position((cursor_x, dn_area.y));
                 }
             }
         }
@@ -3577,18 +3676,36 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         Style::default()
     };
 
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
-            Constraint::Percentage(40),
-        ])
+    let daily_note_display = if app.focus_area == FocusArea::DailyNotePath && app.input_mode == InputMode::Editing {
+        format!("daily note path: > {}", app.input_buffer)
+    } else {
+        format!("daily note path: {}", app.all_projects.daily_note_path.as_deref().unwrap_or("-"))
+    };
+    let daily_note_style = if app.focus_area == FocusArea::DailyNotePath {
+        Style::default().bg(Color::Blue).fg(Color::White)
+    } else {
+        Style::default()
+    };
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
         .split(area);
 
-    frame.render_widget(Paragraph::new(app.status_message.clone()).alignment(Alignment::Left), layout[0]);
-    frame.render_widget(Paragraph::new(topic_display).style(topic_style).alignment(Alignment::Left), layout[1]);
-    frame.render_widget(Paragraph::new(help_text).alignment(Alignment::Right).wrap(Wrap { trim: true }), layout[2]);
+    let row0 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(30), Constraint::Percentage(40)])
+        .split(rows[0]);
+
+    let row1 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[1]);
+
+    frame.render_widget(Paragraph::new(app.status_message.clone()).alignment(Alignment::Left), row0[0]);
+    frame.render_widget(Paragraph::new(topic_display).style(topic_style).alignment(Alignment::Left), row0[1]);
+    frame.render_widget(Paragraph::new(help_text).alignment(Alignment::Right).wrap(Wrap { trim: true }), row0[2]);
+    frame.render_widget(Paragraph::new(daily_note_display).style(daily_note_style).alignment(Alignment::Left), row1[0]);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
