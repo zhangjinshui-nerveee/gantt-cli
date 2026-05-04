@@ -774,7 +774,7 @@ impl App {
     fn export_to_markwhen(&self) -> io::Result<usize> {
         let home = std::env::var("HOME").unwrap_or_default();
         let mut count = 0;
-        for project in &self.all_projects.projects {
+        for project in self.all_projects.projects.iter().filter(|p| !p.archived) {
             if let Some(raw_obs) = &project.obsidian_path {
                 if !raw_obs.trim().is_empty() {
                     let expanded = if raw_obs.starts_with("~/") {
@@ -838,29 +838,86 @@ impl App {
         };
         let obs_paths = vec![expanded];
 
-        // Build note content: WIP tasks from all projects
+        let is_wip = |t: &Task| -> bool {
+            if t.progress == 100 { return false; }
+            let in_progress = t.progress > 0;
+            let active_today = t.start_date.map_or(false, |s| {
+                t.end_date.map_or(false, |e| today >= s && today <= e)
+            });
+            in_progress || active_today
+        };
+
+        // Build note content: WIP tasks from all projects, preserving hierarchy
         let mut sections: Vec<String> = vec![];
-        for project in &self.all_projects.projects {
+        for project in self.all_projects.projects.iter().filter(|p| !p.archived) {
             let mut project_clone = project.clone();
             compute_dates_for_project(&mut project_clone);
-            let wip: Vec<&Task> = project_clone.tasks.iter().filter(|t| {
-                if t.progress == 100 { return false; }
-                let in_progress = t.progress > 0;
-                let active_today = t.start_date.map_or(false, |s| {
-                    t.end_date.map_or(false, |e| today >= s && today <= e)
-                });
-                in_progress || active_today
-            }).collect();
-            if wip.is_empty() { continue; }
-            let mut lines = vec![format!("## {}", project_clone.project_name)];
-            for task in wip {
-                let label = if task.create_note {
+
+            let task_map: HashMap<u32, &Task> = project_clone.tasks.iter().map(|t| (t.id, t)).collect();
+            let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+            for task in &project_clone.tasks {
+                if let Some(pid) = task.parent_id {
+                    children_map.entry(pid).or_default().push(task.id);
+                }
+            }
+            let top_level: Vec<&Task> = project_clone.tasks.iter().filter(|t| t.parent_id.is_none()).collect();
+
+            fn has_wip_descendant(id: u32, children_map: &HashMap<u32, Vec<u32>>, task_map: &HashMap<u32, &Task>, is_wip: &dyn Fn(&Task) -> bool) -> bool {
+                if let Some(kids) = children_map.get(&id) {
+                    for &kid_id in kids {
+                        if let Some(kid) = task_map.get(&kid_id) {
+                            if is_wip(kid) || has_wip_descendant(kid_id, children_map, task_map, is_wip) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+
+            fn task_label(task: &Task) -> String {
+                if task.create_note {
                     format!("[[{}]]", sanitize_filename(&task.name))
                 } else {
                     task.name.clone()
-                };
-                lines.push(format!("- {} ({}%)", label, task.progress));
+                }
             }
+
+            fn collect_lines(
+                id: u32,
+                indent: &str,
+                children_map: &HashMap<u32, Vec<u32>>,
+                task_map: &HashMap<u32, &Task>,
+                is_wip: &dyn Fn(&Task) -> bool,
+                lines: &mut Vec<String>,
+            ) {
+                let task = match task_map.get(&id) { Some(t) => t, None => return };
+                let self_wip = is_wip(task);
+                let child_has_wip = has_wip_descendant(id, children_map, task_map, is_wip);
+                if !self_wip && !child_has_wip { return; }
+
+                let label = task_label(task);
+                if self_wip {
+                    lines.push(format!("{}- {} ({}%)", indent, label, task.progress));
+                } else {
+                    lines.push(format!("{}- {}", indent, label));
+                }
+                let child_indent = format!("{}  ", indent);
+                if let Some(kids) = children_map.get(&id) {
+                    for &kid_id in kids {
+                        collect_lines(kid_id, &child_indent, children_map, task_map, is_wip, lines);
+                    }
+                }
+            }
+
+            let mut task_lines: Vec<String> = vec![];
+            for parent in &top_level {
+                collect_lines(parent.id, "", &children_map, &task_map, &is_wip, &mut task_lines);
+            }
+
+            if task_lines.is_empty() { continue; }
+            let mut lines = vec![format!("## {}", project_clone.project_name)];
+            lines.extend(task_lines);
             sections.push(lines.join("\n"));
         }
 
