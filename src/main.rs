@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{self, stdout};
+use std::os::unix::fs::PermissionsExt;
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -793,12 +794,28 @@ impl App {
                     // Write gantt markwhen file with wiki links
                     let safe_project = sanitize_filename(&project_clone.project_name);
                     let mw_path = obs_dir.join(format!("_gantt_{}.mw", safe_project));
+                    if mw_path.exists() {
+                        let mut p = fs::metadata(&mw_path)?.permissions();
+                        p.set_mode(0o644);
+                        fs::set_permissions(&mw_path, p)?;
+                    }
                     let content = generate_markwhen_content(&project_clone, self.today);
                     fs::write(&mw_path, content)?;
+                    let mut p = fs::metadata(&mw_path)?.permissions();
+                    p.set_mode(0o444);
+                    fs::set_permissions(&mw_path, p)?;
                     // Write project overview markdown
                     let overview_path = obs_dir.join(format!("_proj_{}.md", safe_project));
+                    if overview_path.exists() {
+                        let mut p = fs::metadata(&overview_path)?.permissions();
+                        p.set_mode(0o644);
+                        fs::set_permissions(&overview_path, p)?;
+                    }
                     let overview = generate_project_overview(&project_clone);
                     fs::write(&overview_path, overview)?;
+                    let mut p = fs::metadata(&overview_path)?.permissions();
+                    p.set_mode(0o444);
+                    fs::set_permissions(&overview_path, p)?;
                     count += 1;
                 }
             }
