@@ -795,6 +795,10 @@ impl App {
                     let mw_path = obs_dir.join(format!("_gantt_{}.mw", safe_project));
                     let content = generate_markwhen_content(&project_clone, self.today);
                     fs::write(&mw_path, content)?;
+                    // Write project overview markdown
+                    let overview_path = obs_dir.join(format!("_proj_{}.md", safe_project));
+                    let overview = generate_project_overview(&project_clone);
+                    fs::write(&overview_path, overview)?;
                     count += 1;
                 }
             }
@@ -1538,6 +1542,77 @@ fn compute_dates_for_project(project: &mut ProjectData) {
             }
         }
     }
+}
+
+fn generate_project_overview(project: &ProjectData) -> String {
+    let task_map: HashMap<u32, &Task> = project.tasks.iter().map(|t| (t.id, t)).collect();
+    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+    for task in &project.tasks {
+        if let Some(pid) = task.parent_id {
+            children_map.entry(pid).or_default().push(task.id);
+        }
+    }
+    let top_level: Vec<&Task> = project.tasks.iter().filter(|t| t.parent_id.is_none()).collect();
+
+    let task_label = |task: &Task| -> String {
+        if task.create_note {
+            format!("[[{}]]", sanitize_filename(&task.name))
+        } else {
+            task.name.clone()
+        }
+    };
+
+    fn task_line(task: &Task, indent: usize, task_label: &dyn Fn(&Task) -> String) -> String {
+        let pad = "  ".repeat(indent);
+        let check = if task.progress == 100 { "x" } else { " " };
+        let dates = match (task.start_date, task.end_date) {
+            (Some(s), Some(e)) => format!(" | {} → {}", s, e),
+            _ => String::new(),
+        };
+        format!("{}- [{}] {} ({}%) — {}{}", pad, check, task_label(task), task.progress, task.assigned_to, dates)
+    }
+
+    fn collect_lines(
+        id: u32,
+        indent: usize,
+        children_map: &HashMap<u32, Vec<u32>>,
+        task_map: &HashMap<u32, &Task>,
+        task_label: &dyn Fn(&Task) -> String,
+        lines: &mut Vec<String>,
+    ) {
+        if let Some(kids) = children_map.get(&id) {
+            for &kid_id in kids {
+                if let Some(kid) = task_map.get(&kid_id) {
+                    lines.push(task_line(kid, indent, task_label));
+                    collect_lines(kid_id, indent + 1, children_map, task_map, task_label, lines);
+                }
+            }
+        }
+    }
+
+    let end_str = project.project_end_date
+        .map_or_else(|| "ongoing".to_string(), |d| d.to_string());
+
+    let done = project.tasks.iter().filter(|t| t.progress == 100).count();
+    let total = project.tasks.len();
+
+    let mut lines = vec![
+        format!("# {}", project.project_name),
+        "".to_string(),
+        format!("**Start:** {} | **End:** {} | **Progress:** {}/{} tasks done",
+            project.project_start_date, end_str, done, total),
+        "".to_string(),
+        "## Tasks".to_string(),
+        "".to_string(),
+    ];
+
+    for parent in &top_level {
+        lines.push(task_line(parent, 0, &task_label));
+        collect_lines(parent.id, 1, &children_map, &task_map, &task_label, &mut lines);
+    }
+
+    lines.push("".to_string());
+    lines.join("\n")
 }
 
 fn sanitize_filename(name: &str) -> String {
