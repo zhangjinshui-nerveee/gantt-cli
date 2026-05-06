@@ -2140,6 +2140,35 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 app.status_message = format!("Note attachment {}.", status);
             }
         }
+        KeyCode::Char('o') => {
+            if let Some(idx) = app.table_state.selected() {
+                let task = &app.get_current_project().tasks[idx];
+                if task.create_note {
+                    let raw_obs = app.get_current_project().obsidian_path.clone();
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    if let Some(raw) = raw_obs.filter(|p| !p.trim().is_empty()) {
+                        let expanded = if raw.starts_with("~/") {
+                            format!("{}/{}", home, &raw[2..])
+                        } else {
+                            raw.clone()
+                        };
+                        let note_path = std::path::Path::new(&expanded)
+                            .join(format!("{}.md", sanitize_filename(&task.name)));
+                        let uri = format!("obsidian://open?path={}", urlencoding::encode(note_path.to_string_lossy().as_ref()));
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg(&uri)
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                        app.status_message = format!("Opening note: {}", note_path.display());
+                    } else {
+                        app.status_message = "No Obsidian path set for this project.".to_string();
+                    }
+                } else {
+                    app.status_message = "This task has no note (press 'n' to attach one).".to_string();
+                }
+            }
+        }
         KeyCode::Char('u') => app.undo(),
         KeyCode::Char('t') => {
             let today_date = app.today; // Capture app.today before mutable borrow
@@ -3869,6 +3898,8 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from("  Enter            Edit selected field"),
         Line::from("  > / <            Indent/unindent task"),
         Line::from("  K/J              Move task up/down"),
+        Line::from("  n                Toggle Obsidian note attachment"),
+        Line::from("  o                Open Obsidian note for task"),
         Line::from(""),
         Line::from(Span::styled("TODO LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  T                Toggle todo list panel"),
