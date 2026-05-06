@@ -983,7 +983,7 @@ impl App {
             format!("# Daily Note - {}\n\n{}\n", today, all_sections.join("\n\n"))
         };
 
-        let filename = format!("{}.md", today);
+        let filename = format!("worklog-{}.md", today);
         let mut count = 0;
         for expanded in &obs_paths {
             let obs_dir = std::path::Path::new(expanded);
