@@ -956,6 +956,10 @@ impl App {
                 };
                 let check = if item.completed { "x" } else { " " };
                 lines.push(format!("- [{}] {}", check, label));
+                for sub in &item.subtasks {
+                    let sub_check = if sub.completed { "x" } else { " " };
+                    lines.push(format!("  - [{}] {}", sub_check, sub.text));
+                }
             }
             Some(lines.join("\n"))
         };
@@ -2155,7 +2159,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                         let note_path = std::path::Path::new(&expanded)
                             .join(format!("{}.md", sanitize_filename(&task.name)));
                         let uri = format!("obsidian://open?path={}", urlencoding::encode(note_path.to_string_lossy().as_ref()));
-                        let _ = std::process::Command::new("xdg-open")
+                        let _ = std::process::Command::new("obsidian")
                             .arg(&uri)
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
