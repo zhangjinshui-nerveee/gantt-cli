@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{self, stdout};
-use std::os::unix::fs::PermissionsExt;
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -255,15 +254,32 @@ struct App {
 }
 
 fn get_default_data_path() -> PathBuf {
+    // On Windows, prefer %APPDATA%\gantt-cli\projects.json
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = env::var("APPDATA") {
+            let mut path = PathBuf::from(appdata);
+            path.push("gantt-cli");
+            path.push("projects.json");
+            return path;
+        }
+        if let Ok(userprofile) = env::var("USERPROFILE") {
+            let mut path = PathBuf::from(userprofile);
+            path.push("AppData");
+            path.push("Roaming");
+            path.push("gantt-cli");
+            path.push("projects.json");
+            return path;
+        }
+    }
     if let Ok(home) = env::var("HOME") {
         let mut path = PathBuf::from(home);
         path.push(".config");
         path.push("gantt-cli");
         path.push("projects.json");
-        path
-    } else {
-        PathBuf::from("projects.json")
+        return path;
     }
+    PathBuf::from("projects.json")
 }
 
 impl App {
@@ -796,25 +812,25 @@ impl App {
                     let mw_path = obs_dir.join(format!("_gantt_{}.mw", safe_project));
                     if mw_path.exists() {
                         let mut p = fs::metadata(&mw_path)?.permissions();
-                        p.set_mode(0o644);
+                        p.set_readonly(false);
                         fs::set_permissions(&mw_path, p)?;
                     }
                     let content = generate_markwhen_content(&project_clone, self.today);
                     fs::write(&mw_path, content)?;
                     let mut p = fs::metadata(&mw_path)?.permissions();
-                    p.set_mode(0o444);
+                    p.set_readonly(true);
                     fs::set_permissions(&mw_path, p)?;
                     // Write project overview markdown
                     let overview_path = obs_dir.join(format!("_proj_{}.md", safe_project));
                     if overview_path.exists() {
                         let mut p = fs::metadata(&overview_path)?.permissions();
-                        p.set_mode(0o644);
+                        p.set_readonly(false);
                         fs::set_permissions(&overview_path, p)?;
                     }
                     let overview = generate_project_overview(&project_clone);
                     fs::write(&overview_path, overview)?;
                     let mut p = fs::metadata(&overview_path)?.permissions();
-                    p.set_mode(0o444);
+                    p.set_readonly(true);
                     fs::set_permissions(&overview_path, p)?;
                     count += 1;
                 }
@@ -1724,9 +1740,12 @@ fn main() -> io::Result<()> {
 
 fn run_app(app: &mut App) -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    terminal.draw(|f| ui(f, app))?;
     while !app.should_quit {
-        terminal.draw(|f| ui(f, app))?;
         handle_events(app)?;
+        if !app.should_quit {
+            terminal.draw(|f| ui(f, app))?;
+        }
     }
     Ok(())
 }
