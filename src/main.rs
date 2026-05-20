@@ -1370,13 +1370,11 @@ fn run_app(app: &mut App) -> io::Result<()> {
 
 // --- EVENT HANDLING ---
 fn handle_events(app: &mut App) -> io::Result<()> {
-    if event::poll(std::time::Duration::from_millis(50))? {
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Press {
-                match app.input_mode {
-                    InputMode::Normal => handle_normal_mode(app, key),
-                    InputMode::Editing => handle_editing_mode(app, key),
-                }
+    if let Event::Key(key) = event::read()? {
+        if key.kind == KeyEventKind::Press {
+            match app.input_mode {
+                InputMode::Normal => handle_normal_mode(app, key),
+                InputMode::Editing => handle_editing_mode(app, key),
             }
         }
     }
