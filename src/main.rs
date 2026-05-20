@@ -1370,7 +1370,17 @@ fn run_app(app: &mut App) -> io::Result<()> {
 
 // --- EVENT HANDLING ---
 fn handle_events(app: &mut App) -> io::Result<()> {
-    if let Event::Key(key) = event::read()? {
+    // Blocking wait for first event, then drain all queued events before
+    // rendering so key-repeat backlog doesn't trickle through frame by frame.
+    dispatch_event(app, event::read()?);
+    while event::poll(std::time::Duration::ZERO)? {
+        dispatch_event(app, event::read()?);
+    }
+    Ok(())
+}
+
+fn dispatch_event(app: &mut App, ev: Event) {
+    if let Event::Key(key) = ev {
         if key.kind == KeyEventKind::Press {
             match app.input_mode {
                 InputMode::Normal => handle_normal_mode(app, key),
@@ -1378,7 +1388,6 @@ fn handle_events(app: &mut App) -> io::Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 fn handle_normal_mode(app: &mut App, key: KeyEvent) {
