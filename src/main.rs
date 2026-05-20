@@ -30,8 +30,6 @@ struct Task {
     dependencies: Vec<u32>,
     manual_start_date: Option<NaiveDate>,
     parent_id: Option<u32>,
-    #[serde(default)]
-    create_note: bool,
     #[serde(skip)]
     start_date: Option<NaiveDate>,
     #[serde(skip)]
@@ -48,8 +46,6 @@ struct ProjectData {
     tasks: Vec<Task>,
     #[serde(default)]
     archived: bool,
-    #[serde(default)]
-    obsidian_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -156,8 +152,6 @@ struct AllProjectsData {
     scheduled_events: Vec<ScheduledEvent>,
     #[serde(default)]
     show_archived: bool,
-    #[serde(default)]
-    daily_note_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -189,7 +183,6 @@ enum ProjectField {
     Name,
     StartDate,
     EndDate,
-    ObsidianPath,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -198,7 +191,6 @@ enum FocusArea {
     Tasks,
     TodoList,
     NtfyTopic,
-    DailyNotePath,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -297,7 +289,6 @@ impl App {
                 column_visibility: ColumnVisibility::default(),
                 scheduled_events: vec![],
                 show_archived: false,
-                daily_note_path: None,
             },
             current_project_index: 0,
             today: Local::now().date_naive(),
@@ -378,10 +369,9 @@ impl App {
             day_offset: 0,
             tasks: vec![],
             archived: false,
-            obsidian_path: None,
         };
-        default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, parent_id: None, create_note: false, start_date: None, end_date: None });
-        default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, parent_id: None, create_note: false, start_date: None, end_date: None });
+        default_project.tasks.push(Task { id: 0, name: "Requirement Gathering".into(), assigned_to: "Alice".into(), duration: 5, progress: 100, dependencies: vec![], manual_start_date: None, parent_id: None, start_date: None, end_date: None });
+        default_project.tasks.push(Task { id: 0, name: "UI/UX Design".into(), assigned_to: "Bob".into(), duration: 7, progress: 50, dependencies: vec![1], manual_start_date: None, parent_id: None, start_date: None, end_date: None });
         
         self.all_projects.projects.push(default_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
@@ -400,7 +390,6 @@ impl App {
             day_offset: 0,
             tasks: vec![],
             archived: false,
-            obsidian_path: None,
         };
         self.all_projects.projects.push(new_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
@@ -614,7 +603,7 @@ impl App {
                             new_selected_index = Some(current_project.tasks.len() - 1);
                         } else if current_project.tasks.is_empty() {
                             new_selected_index = None;
-                            new_focus_area = FocusArea::Project(ProjectField::ObsidianPath);
+                            new_focus_area = FocusArea::Project(ProjectField::EndDate);
                         } else if selected_index < current_project.tasks.len() {
                             new_selected_index = Some(selected_index);
                         } else if current_project.tasks.len() > 0 {
@@ -773,70 +762,8 @@ impl App {
         self.quit_pending = false;
         self.save_conflict_pending = false;
 
-        let exported = self.export_to_markwhen();
-        let _ = self.write_daily_note();
-        self.status_message = match exported {
-            Ok(0) => format!("Saved to {}.", self.current_file_path),
-            Ok(n) => format!("Saved to {}. Exported {} markwhen file(s).", self.current_file_path, n),
-            Err(e) => format!("Saved, but markwhen export failed: {}", e),
-        };
+        self.status_message = format!("Saved to {}.", self.current_file_path);
         Ok(())
-    }
-
-    fn export_to_markwhen(&self) -> io::Result<usize> {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let mut count = 0;
-        for project in self.all_projects.projects.iter().filter(|p| !p.archived) {
-            if let Some(raw_obs) = &project.obsidian_path {
-                if !raw_obs.trim().is_empty() {
-                    let expanded = if raw_obs.starts_with("~/") {
-                        format!("{}/{}", home, &raw_obs[2..])
-                    } else {
-                        raw_obs.clone()
-                    };
-                    let obs_dir = std::path::Path::new(&expanded);
-                    fs::create_dir_all(obs_dir)?;
-                    let mut project_clone = project.clone();
-                    compute_dates_for_project(&mut project_clone);
-                    // Touch note files for each task that has create_note enabled
-                    for task in &project_clone.tasks {
-                        if !task.create_note { continue; }
-                        let safe_name = sanitize_filename(&task.name);
-                        let note_path = obs_dir.join(format!("{}.md", safe_name));
-                        if !note_path.exists() {
-                            fs::write(&note_path, "")?;
-                        }
-                    }
-                    // Write gantt markwhen file with wiki links
-                    let safe_project = sanitize_filename(&project_clone.project_name);
-                    let mw_path = obs_dir.join(format!("_gantt_{}.mw", safe_project));
-                    if mw_path.exists() {
-                        let mut p = fs::metadata(&mw_path)?.permissions();
-                        p.set_readonly(false);
-                        fs::set_permissions(&mw_path, p)?;
-                    }
-                    let content = generate_markwhen_content(&project_clone, self.today);
-                    fs::write(&mw_path, content)?;
-                    let mut p = fs::metadata(&mw_path)?.permissions();
-                    p.set_readonly(true);
-                    fs::set_permissions(&mw_path, p)?;
-                    // Write project overview markdown
-                    let overview_path = obs_dir.join(format!("_proj_{}.md", safe_project));
-                    if overview_path.exists() {
-                        let mut p = fs::metadata(&overview_path)?.permissions();
-                        p.set_readonly(false);
-                        fs::set_permissions(&overview_path, p)?;
-                    }
-                    let overview = generate_project_overview(&project_clone);
-                    fs::write(&overview_path, overview)?;
-                    let mut p = fs::metadata(&overview_path)?.permissions();
-                    p.set_readonly(true);
-                    fs::set_permissions(&overview_path, p)?;
-                    count += 1;
-                }
-            }
-        }
-        Ok(count)
     }
 
     fn load_all_projects(&mut self) -> io::Result<()> {
@@ -853,165 +780,6 @@ impl App {
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "File not found"))
         }
-    }
-
-    fn write_daily_note(&self) -> io::Result<usize> {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let today = self.today;
-
-        let raw = match &self.all_projects.daily_note_path {
-            Some(p) if !p.trim().is_empty() => p.clone(),
-            _ => return Ok(0),
-        };
-        let expanded = if raw.starts_with("~/") {
-            format!("{}/{}", home, &raw[2..])
-        } else {
-            raw.clone()
-        };
-        let obs_paths = vec![expanded];
-
-        let is_wip = |t: &Task| -> bool {
-            if t.progress == 100 { return false; }
-            let in_progress = t.progress > 0;
-            let active_today = t.start_date.map_or(false, |s| {
-                t.end_date.map_or(false, |e| today >= s && today <= e)
-            });
-            in_progress || active_today
-        };
-
-        // Build note content: WIP tasks from all projects, preserving hierarchy
-        let mut sections: Vec<String> = vec![];
-        for project in self.all_projects.projects.iter().filter(|p| !p.archived) {
-            let mut project_clone = project.clone();
-            compute_dates_for_project(&mut project_clone);
-
-            let task_map: HashMap<u32, &Task> = project_clone.tasks.iter().map(|t| (t.id, t)).collect();
-            let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
-            for task in &project_clone.tasks {
-                if let Some(pid) = task.parent_id {
-                    children_map.entry(pid).or_default().push(task.id);
-                }
-            }
-            let top_level: Vec<&Task> = project_clone.tasks.iter().filter(|t| t.parent_id.is_none()).collect();
-
-            fn has_wip_descendant(id: u32, children_map: &HashMap<u32, Vec<u32>>, task_map: &HashMap<u32, &Task>, is_wip: &dyn Fn(&Task) -> bool) -> bool {
-                if let Some(kids) = children_map.get(&id) {
-                    for &kid_id in kids {
-                        if let Some(kid) = task_map.get(&kid_id) {
-                            if is_wip(kid) || has_wip_descendant(kid_id, children_map, task_map, is_wip) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                false
-            }
-
-            let task_label = |task: &Task| -> String {
-                if task.create_note {
-                    format!("[[{}]]", sanitize_filename(&task.name))
-                } else {
-                    task.name.clone()
-                }
-            };
-
-            fn collect_lines(
-                id: u32,
-                indent: &str,
-                children_map: &HashMap<u32, Vec<u32>>,
-                task_map: &HashMap<u32, &Task>,
-                is_wip: &dyn Fn(&Task) -> bool,
-                task_label: &dyn Fn(&Task) -> String,
-                lines: &mut Vec<String>,
-            ) {
-                let task = match task_map.get(&id) { Some(t) => t, None => return };
-                let self_wip = is_wip(task);
-                let child_has_wip = has_wip_descendant(id, children_map, task_map, is_wip);
-                if !self_wip && !child_has_wip { return; }
-
-                let label = task_label(task);
-                if self_wip {
-                    lines.push(format!("{}- {} ({}%)", indent, label, task.progress));
-                } else {
-                    lines.push(format!("{}- {}", indent, label));
-                }
-                let child_indent = format!("{}  ", indent);
-                if let Some(kids) = children_map.get(&id) {
-                    for &kid_id in kids {
-                        collect_lines(kid_id, &child_indent, children_map, task_map, is_wip, task_label, lines);
-                    }
-                }
-            }
-
-            let mut task_lines: Vec<String> = vec![];
-            for parent in &top_level {
-                collect_lines(parent.id, "", &children_map, &task_map, &is_wip, &task_label, &mut task_lines);
-            }
-
-            if task_lines.is_empty() { continue; }
-            let mut lines = vec![format!("### {}", project_clone.project_name)];
-            lines.extend(task_lines);
-            sections.push(lines.join("\n"));
-        }
-
-        // Build a name→create_note lookup across all non-archived projects
-        let note_task_map: HashMap<&str, bool> = self.all_projects.projects.iter()
-            .filter(|p| !p.archived)
-            .flat_map(|p| p.tasks.iter())
-            .map(|t| (t.name.as_str(), t.create_note))
-            .collect();
-
-        let todo_section = if self.all_projects.todo_list.is_empty() {
-            None
-        } else {
-            let mut lines = vec!["## Todo".to_string()];
-            for item in &self.all_projects.todo_list {
-                let label = match note_task_map.get(item.text.as_str()) {
-                    Some(true) => format!("[[{}]]", sanitize_filename(&item.text)),
-                    _ => item.text.clone(),
-                };
-                let check = if item.completed { "x" } else { " " };
-                lines.push(format!("- [{}] {}", check, label));
-                for sub in &item.subtasks {
-                    let sub_check = if sub.completed { "x" } else { " " };
-                    lines.push(format!("  - [{}] {}", sub_check, sub.text));
-                }
-            }
-            Some(lines.join("\n"))
-        };
-
-        let overview_section = if sections.is_empty() {
-            None
-        } else {
-            let mut lines = vec!["## Overview".to_string()];
-            lines.push(sections.join("\n\n"));
-            Some(lines.join("\n\n"))
-        };
-
-        let mut all_sections = vec![];
-        if let Some(todo) = todo_section {
-            all_sections.push(todo);
-            if overview_section.is_some() {
-                all_sections.push("---".to_string());
-            }
-        }
-        if let Some(overview) = overview_section { all_sections.push(overview); }
-
-        let content = if all_sections.is_empty() {
-            format!("# Daily Note - {}\n\nNo WIP tasks today.\n", today)
-        } else {
-            format!("# Daily Note - {}\n\n{}\n", today, all_sections.join("\n\n"))
-        };
-
-        let filename = format!("worklog-{}.md", today);
-        let mut count = 0;
-        for expanded in &obs_paths {
-            let obs_dir = std::path::Path::new(expanded);
-            fs::create_dir_all(obs_dir)?;
-            fs::write(obs_dir.join(&filename), &content)?;
-            count += 1;
-        }
-        Ok(count)
     }
 
     fn file_was_modified_externally(&self) -> bool {
@@ -1373,7 +1141,6 @@ impl App {
             manual_start_date: None,
 
             parent_id: None, // Top-level
-            create_note: false,
             start_date: None,
             end_date: None,
         };
@@ -1417,7 +1184,6 @@ impl App {
             manual_start_date: parent_start_date,
 
             parent_id: parent_id_for_new_task,
-            create_note: false,
             start_date: None,
             end_date: None,
         };
@@ -1579,154 +1345,6 @@ fn compute_dates_for_project(project: &mut ProjectData) {
             }
         }
     }
-}
-
-fn generate_project_overview(project: &ProjectData) -> String {
-    let task_map: HashMap<u32, &Task> = project.tasks.iter().map(|t| (t.id, t)).collect();
-    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
-    for task in &project.tasks {
-        if let Some(pid) = task.parent_id {
-            children_map.entry(pid).or_default().push(task.id);
-        }
-    }
-    let top_level: Vec<&Task> = project.tasks.iter().filter(|t| t.parent_id.is_none()).collect();
-
-    let task_label = |task: &Task| -> String {
-        if task.create_note {
-            format!("[[{}]]", sanitize_filename(&task.name))
-        } else {
-            task.name.clone()
-        }
-    };
-
-    fn task_line(task: &Task, indent: usize, task_label: &dyn Fn(&Task) -> String) -> String {
-        let pad = "  ".repeat(indent);
-        let check = if task.progress == 100 { "x" } else { " " };
-        let dates = match (task.start_date, task.end_date) {
-            (Some(s), Some(e)) => format!(" | {} → {}", s, e),
-            _ => String::new(),
-        };
-        format!("{}- [{}] {} ({}%) — {}{}", pad, check, task_label(task), task.progress, task.assigned_to, dates)
-    }
-
-    fn collect_lines(
-        id: u32,
-        indent: usize,
-        children_map: &HashMap<u32, Vec<u32>>,
-        task_map: &HashMap<u32, &Task>,
-        task_label: &dyn Fn(&Task) -> String,
-        lines: &mut Vec<String>,
-    ) {
-        if let Some(kids) = children_map.get(&id) {
-            for &kid_id in kids {
-                if let Some(kid) = task_map.get(&kid_id) {
-                    lines.push(task_line(kid, indent, task_label));
-                    collect_lines(kid_id, indent + 1, children_map, task_map, task_label, lines);
-                }
-            }
-        }
-    }
-
-    let end_str = project.project_end_date
-        .map_or_else(|| "ongoing".to_string(), |d| d.to_string());
-
-    let done = project.tasks.iter().filter(|t| t.progress == 100).count();
-    let total = project.tasks.len();
-
-    let mut lines = vec![
-        format!("# {}", project.project_name),
-        "".to_string(),
-        format!("**Start:** {} | **End:** {} | **Progress:** {}/{} tasks done",
-            project.project_start_date, end_str, done, total),
-        "".to_string(),
-        "## Tasks".to_string(),
-        "".to_string(),
-    ];
-
-    for parent in &top_level {
-        lines.push(task_line(parent, 0, &task_label));
-        collect_lines(parent.id, 1, &children_map, &task_map, &task_label, &mut lines);
-    }
-
-    lines.push("".to_string());
-    lines.join("\n")
-}
-
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' || c == '.' { c } else { '_' })
-        .collect::<String>()
-        .trim()
-        .to_string()
-}
-
-fn generate_markwhen_content(project: &ProjectData, today: NaiveDate) -> String {
-    let task_map: HashMap<u32, &Task> = project.tasks.iter().map(|t| (t.id, t)).collect();
-    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
-    for task in &project.tasks {
-        if let Some(pid) = task.parent_id {
-            children_map.entry(pid).or_default().push(task.id);
-        }
-    }
-    let top_level: Vec<&Task> = project.tasks.iter().filter(|t| t.parent_id.is_none()).collect();
-
-    fn progress_tag(p: u8, start: NaiveDate, end: NaiveDate, today: NaiveDate) -> &'static str {
-        if p == 100 { " #done" } else if p > 0 || (today >= start && today <= end) { " #wip" } else { "" }
-    }
-    let task_label = |task: &Task| -> String {
-        if task.create_note {
-            format!("[[{}]]", sanitize_filename(&task.name))
-        } else {
-            task.name.clone()
-        }
-    };
-    let task_line = |task: &Task, indent: &str| -> String {
-        match (task.start_date, task.end_date) {
-            (Some(s), Some(e)) => format!("{}{}/{}: {}{}", indent, s, e, task_label(task), progress_tag(task.progress, s, e, today)),
-            _ => format!("{}// (no dates): {}", indent, task_label(task)),
-        }
-    };
-
-    let end_str = project.project_end_date
-        .map_or_else(|| "ongoing".to_string(), |d| d.to_string());
-
-    let mut lines = vec![
-        "---".to_string(),
-        format!("title: {}", project.project_name),
-        "---".to_string(),
-        "".to_string(),
-        format!("// {} → {}", project.project_start_date, end_str),
-        "".to_string(),
-    ];
-
-    for parent in &top_level {
-        let kids = children_map.get(&parent.id).map(|v| v.as_slice()).unwrap_or(&[]);
-        if !kids.is_empty() {
-            lines.push(format!("group {}", task_label(parent)));
-            for &kid_id in kids {
-                if let Some(kid) = task_map.get(&kid_id) {
-                    let grandkids = children_map.get(&kid_id).map(|v| v.as_slice()).unwrap_or(&[]);
-                    if !grandkids.is_empty() {
-                        lines.push(format!("  group {}", task_label(kid)));
-                        for &gc_id in grandkids {
-                            if let Some(gc) = task_map.get(&gc_id) {
-                                lines.push(task_line(gc, "    "));
-                            }
-                        }
-                        lines.push("  endGroup".to_string());
-                    } else {
-                        lines.push(task_line(kid, "  "));
-                    }
-                }
-            }
-            lines.push("endGroup".to_string());
-        } else {
-            lines.push(task_line(parent, ""));
-        }
-        lines.push("".to_string());
-    }
-
-    lines.join("\n")
 }
 
 // --- MAIN ---
@@ -1952,13 +1570,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             KeyCode::Char('n') => app.move_project_forward(),
             KeyCode::Char('p') => app.move_project_backward(),
             KeyCode::Char('f') => app.push_todo_to_phone(),
-            KeyCode::Char('e') => {
-                match app.export_to_markwhen() {
-                    Ok(0) => app.status_message = "No export paths configured (Export or Obsidian fields).".to_string(),
-                    Ok(n) => app.status_message = format!("Exported {} markwhen file(s).", n),
-                    Err(e) => app.status_message = format!("Export failed: {}", e),
-                }
-            },
             KeyCode::Char('b') => {
                 app.all_projects.show_archived = !app.all_projects.show_archived;
                 app.is_dirty = true;
@@ -2089,9 +1700,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     app.focus_area = FocusArea::NtfyTopic;
                 }
                 FocusArea::NtfyTopic => {
-                    app.focus_area = FocusArea::DailyNotePath;
-                }
-                FocusArea::DailyNotePath => {
                     app.focus_area = FocusArea::Project(ProjectField::Name);
                 }
             }
@@ -2099,7 +1707,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::BackTab => {
             match app.focus_area {
                 FocusArea::Project(_) => {
-                    app.focus_area = FocusArea::DailyNotePath;
+                    app.focus_area = FocusArea::NtfyTopic;
                 }
                 FocusArea::Tasks => {
                     app.focus_area = FocusArea::Project(ProjectField::Name);
@@ -2116,9 +1724,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     } else {
                         app.focus_area = FocusArea::Tasks;
                     }
-                }
-                FocusArea::DailyNotePath => {
-                    app.focus_area = FocusArea::NtfyTopic;
                 }
             }
         },
@@ -2138,7 +1743,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     manual_start_date: parent_start_date, 
         
                     parent_id: Some(parent_id),
-                    create_note: false,
                     start_date: None,
                     end_date: None
                 });
@@ -2154,44 +1758,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             load_buffer_for_editing(app);
         }
         KeyCode::Char('D') => app.delete_selected_task(),
-        KeyCode::Char('n') => {
-            if let Some(idx) = app.table_state.selected() {
-                app.save_state_for_undo();
-                let task = &mut app.get_current_project_mut().tasks[idx];
-                task.create_note = !task.create_note;
-                let status = if task.create_note { "enabled" } else { "disabled" };
-                app.status_message = format!("Note attachment {}.", status);
-            }
-        }
-        KeyCode::Char('o') => {
-            if let Some(idx) = app.table_state.selected() {
-                let task = &app.get_current_project().tasks[idx];
-                if task.create_note {
-                    let raw_obs = app.get_current_project().obsidian_path.clone();
-                    let home = std::env::var("HOME").unwrap_or_default();
-                    if let Some(raw) = raw_obs.filter(|p| !p.trim().is_empty()) {
-                        let expanded = if raw.starts_with("~/") {
-                            format!("{}/{}", home, &raw[2..])
-                        } else {
-                            raw.clone()
-                        };
-                        let note_path = std::path::Path::new(&expanded)
-                            .join(format!("{}.md", sanitize_filename(&task.name)));
-                        let uri = format!("obsidian://open?path={}", urlencoding::encode(note_path.to_string_lossy().as_ref()));
-                        let _ = std::process::Command::new("obsidian")
-                            .arg(&uri)
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn();
-                        app.status_message = format!("Opening note: {}", note_path.display());
-                    } else {
-                        app.status_message = "No Obsidian path set for this project.".to_string();
-                    }
-                } else {
-                    app.status_message = "This task has no note (press 'n' to attach one).".to_string();
-                }
-            }
-        }
         KeyCode::Char('u') => app.undo(),
         KeyCode::Char('t') => {
             let today_date = app.today; // Capture app.today before mutable borrow
@@ -2300,10 +1866,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                     }
                 }
                 FocusArea::NtfyTopic => {
-                    app.input_mode = InputMode::Editing;
-                    load_buffer_for_editing(app);
-                }
-                FocusArea::DailyNotePath => {
                     app.input_mode = InputMode::Editing;
                     load_buffer_for_editing(app);
                 }
@@ -2475,7 +2037,6 @@ fn handle_editing_mode(app: &mut App, key: KeyEvent) {
 // --- STATE HELPERS ---
 fn navigate_up(app: &mut App) {
     match app.focus_area {
-        FocusArea::Project(ProjectField::ObsidianPath) => app.focus_area = FocusArea::Project(ProjectField::EndDate),
         FocusArea::Project(ProjectField::EndDate) => app.focus_area = FocusArea::Project(ProjectField::StartDate),
         FocusArea::Project(ProjectField::StartDate) => app.focus_area = FocusArea::Project(ProjectField::Name),
         FocusArea::Project(ProjectField::Name) => {}
@@ -2483,7 +2044,7 @@ fn navigate_up(app: &mut App) {
             if let Some(selected) = app.table_state.selected() {
                 if selected == 0 {
                     app.table_state.select(None);
-                    app.focus_area = FocusArea::Project(ProjectField::ObsidianPath);
+                    app.focus_area = FocusArea::Project(ProjectField::EndDate);
                 } else {
                     app.table_state.select(Some(selected - 1));
                 }
@@ -2511,10 +2072,9 @@ fn navigate_up(app: &mut App) {
                 app.focus_area = FocusArea::Tasks;
                 app.table_state.select(Some(app.get_current_project().tasks.len() - 1));
             } else {
-                app.focus_area = FocusArea::Project(ProjectField::ObsidianPath);
+                app.focus_area = FocusArea::Project(ProjectField::EndDate);
             }
         }
-        FocusArea::DailyNotePath => {}
     }
 }
 
@@ -2522,8 +2082,7 @@ fn navigate_down(app: &mut App) {
     match app.focus_area {
         FocusArea::Project(ProjectField::Name) => app.focus_area = FocusArea::Project(ProjectField::StartDate),
         FocusArea::Project(ProjectField::StartDate) => app.focus_area = FocusArea::Project(ProjectField::EndDate),
-        FocusArea::Project(ProjectField::EndDate) => app.focus_area = FocusArea::Project(ProjectField::ObsidianPath),
-        FocusArea::Project(ProjectField::ObsidianPath) => {
+        FocusArea::Project(ProjectField::EndDate) => {
             if !app.get_current_project().tasks.is_empty() {
                 app.focus_area = FocusArea::Tasks;
                 app.table_state.select(Some(0));
@@ -2558,7 +2117,6 @@ fn navigate_down(app: &mut App) {
             }
         }
         FocusArea::NtfyTopic => {}
-        FocusArea::DailyNotePath => {}
     }
 }
 
@@ -2627,7 +2185,6 @@ fn load_buffer_for_editing(app: &mut App) {
         FocusArea::Project(ProjectField::Name) => app.input_buffer = current_project.project_name.clone(),
         FocusArea::Project(ProjectField::StartDate) => app.input_buffer = current_project.project_start_date.format("%m/%d/%y").to_string(),
         FocusArea::Project(ProjectField::EndDate) => app.input_buffer = current_project.project_end_date.map_or_else(|| "".to_string(), |d| d.format("%m/%d/%y").to_string()),
-        FocusArea::Project(ProjectField::ObsidianPath) => app.input_buffer = current_project.obsidian_path.clone().unwrap_or_default(),
         FocusArea::Tasks => {
             if let Some(index) = app.table_state.selected() {
                 let task = &current_project.tasks[index];
@@ -2665,9 +2222,6 @@ fn load_buffer_for_editing(app: &mut App) {
         FocusArea::NtfyTopic => {
             app.input_buffer = app.all_projects.ntfy_topic.clone().unwrap_or_default();
         }
-        FocusArea::DailyNotePath => {
-            app.input_buffer = app.all_projects.daily_note_path.clone().unwrap_or_default();
-        }
     }
 }
 
@@ -2702,13 +2256,6 @@ fn save_buffer_to_task(app: &mut App) {
                     } else {
                         app.status_message = "Invalid date format. Please use mm/dd/yyyy or 'today'.".to_string();
                     }
-                }
-                ProjectField::ObsidianPath => {
-                    current_project.obsidian_path = if input_buffer_owned.trim().is_empty() {
-                        None
-                    } else {
-                        Some(input_buffer_owned.trim().to_string())
-                    };
                 }
             }
         }
@@ -2860,14 +2407,6 @@ fn save_buffer_to_task(app: &mut App) {
             app.all_projects.ntfy_topic = Some(input_buffer_owned);
             app.is_dirty = true;
         }
-        FocusArea::DailyNotePath => {
-            app.all_projects.daily_note_path = if input_buffer_owned.trim().is_empty() {
-                None
-            } else {
-                Some(input_buffer_owned.trim().to_string())
-            };
-            app.is_dirty = true;
-        }
     }
 }
 
@@ -2936,7 +2475,7 @@ fn calculate_column_widths(app: &App) -> [u16; 8] {
         .max().unwrap_or(0).max(UnicodeWidthStr::width("ID")) as u16 + PADDING;
 
     let name_col_width = current_project.tasks.iter()
-        .map(|t| UnicodeWidthStr::width(t.name.as_str()) + if t.create_note { 4 } else { 0 })
+        .map(|t| UnicodeWidthStr::width(t.name.as_str()))
         .max().unwrap_or(0).max(UnicodeWidthStr::width("Name")) as u16 + 12 + PADDING;
 
     let vis = &app.all_projects.column_visibility;
@@ -2975,7 +2514,7 @@ fn calculate_column_widths(app: &App) -> [u16; 8] {
 fn ui(frame: &mut Frame, app: &mut App) {
     let main_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(frame.area());
 
     let content_area = main_layout[0];
@@ -3013,13 +2552,11 @@ fn ui(frame: &mut Frame, app: &mut App) {
                     let y_offset = match field {
                         ProjectField::Name => 1,
                         ProjectField::StartDate | ProjectField::EndDate => 2,
-                        ProjectField::ObsidianPath => 3,
                     };
                     let x_offset = match field {
                         ProjectField::Name => "Project: ".len(),
                         ProjectField::StartDate => "Start Date: ".len(),
                         ProjectField::EndDate => "Start Date: YYYY/MM/DD | End Date: ".len(),
-                        ProjectField::ObsidianPath => "Obsidian: ".len(),
                     };
                     frame.set_cursor_position(
                         (table_area.x + 1 + (x_offset + app.input_buffer.len()) as u16,
@@ -3036,11 +2573,10 @@ fn ui(frame: &mut Frame, app: &mut App) {
                                 Constraint::Length(1),
                                 Constraint::Length(1),
                                 Constraint::Length(1),
-                                Constraint::Length(1),
                                 Constraint::Min(0),
                             ])
                             .split(inner_area);
-                        let tasks_area = layout[4];
+                        let tasks_area = layout[3];
 
                         let col_constraints: Vec<Constraint> = column_widths.iter().map(|w| Constraint::Length(*w)).collect();
                         let col_layout = Layout::default().direction(Direction::Horizontal).constraints(col_constraints).split(tasks_area);
@@ -3103,30 +2639,13 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 }
                 FocusArea::TodoList => {}
                 FocusArea::NtfyTopic => {
-                    let footer_rows = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-                        .split(footer_area);
                     let row = Layout::default()
                         .direction(Direction::Horizontal)
                         .constraints([Constraint::Percentage(30), Constraint::Percentage(30), Constraint::Percentage(40)])
-                        .split(footer_rows[0]);
+                        .split(footer_area);
                     let topic_area = row[1];
                     let cursor_x = topic_area.x + "ntfy channel name: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
                     frame.set_cursor_position((cursor_x, topic_area.y));
-                }
-                FocusArea::DailyNotePath => {
-                    let footer_rows = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-                        .split(footer_area);
-                    let row = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                        .split(footer_rows[1]);
-                    let dn_area = row[0];
-                    let cursor_x = dn_area.x + "daily note path: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
-                    frame.set_cursor_position((cursor_x, dn_area.y));
                 }
             }
         }
@@ -3397,7 +2916,6 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         .constraints([
             Constraint::Length(1), // Project Name
             Constraint::Length(1), // Project Start/End Date
-            Constraint::Length(1), // Obsidian Path
             Constraint::Length(1), // Header
             Constraint::Min(0),    // Tasks
         ])
@@ -3406,7 +2924,6 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
     let name_style = if app.focus_area == FocusArea::Project(ProjectField::Name) { Style::default().bg(Color::Blue) } else { Style::default() };
     let start_date_style = if app.focus_area == FocusArea::Project(ProjectField::StartDate) { Style::default().bg(Color::Blue) } else { Style::default() };
     let end_date_style = if app.focus_area == FocusArea::Project(ProjectField::EndDate) { Style::default().bg(Color::Blue) } else { Style::default() };
-    let obsidian_style = if app.focus_area == FocusArea::Project(ProjectField::ObsidianPath) { Style::default().bg(Color::Blue) } else { Style::default() };
 
     let name_text = if app.focus_area == FocusArea::Project(ProjectField::Name) && app.input_mode == InputMode::Editing { &app.input_buffer } else { &current_project.project_name };
     let start_date_text = if app.focus_area == FocusArea::Project(ProjectField::StartDate) && app.input_mode == InputMode::Editing { app.input_buffer.clone() } else { current_project.project_start_date.format("%m/%d/%y").to_string() };
@@ -3415,12 +2932,6 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         app.input_buffer.clone()
     } else {
         current_project.project_end_date.map_or_else(|| "-".to_string(), |d| d.format("%m/%d/%y").to_string())
-    };
-
-    let obsidian_path_text = if app.focus_area == FocusArea::Project(ProjectField::ObsidianPath) && app.input_mode == InputMode::Editing {
-        app.input_buffer.clone()
-    } else {
-        current_project.obsidian_path.clone().unwrap_or_else(|| "-".to_string())
     };
 
     let archived_count = app.all_projects.projects.iter().filter(|p| p.archived).count();
@@ -3436,10 +2947,9 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         Span::raw(" | "),
         Span::styled(format!("End Date: {}", end_date_text), end_date_style),
     ])), layout[1]);
-    frame.render_widget(Paragraph::new(format!("Obsidian: {}", obsidian_path_text)).style(obsidian_style), layout[2]);
 
-    let header_area = layout[3];
-    let tasks_area = layout[4];
+    let header_area = layout[2];
+    let tasks_area = layout[3];
 
     let constraints = [
         Constraint::Length(column_widths[0]),
@@ -3546,8 +3056,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         let display_id_str = display_ids.get(&task.id).cloned().unwrap_or_else(|| task.id.to_string());
         let id_cell = Cell::from(format!(" {}", display_id_str));
 
-        let note_prefix = if task.create_note { "[N] " } else { "" };
-        let name_display = format!("{}{}{}", indent, note_prefix, task.name);
+        let name_display = format!("{}{}", indent, task.name);
 
         let cells_data = vec![
             (TaskField::Name, name_display),
@@ -3604,7 +3113,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
 
-    let chart_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(4), Constraint::Min(0)]).split(inner_area);
+    let chart_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(0)]).split(inner_area);
     let header_area = chart_layout[0];
     let content_area = chart_layout[1];
     
@@ -3671,7 +3180,7 @@ fn render_gantt_chart(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
     
-    let header_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).split(header_area);
+    let header_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).split(header_area);
     frame.render_widget(Paragraph::new(Line::from(month_spans)).scroll((0, 0)), header_layout[0]);
     frame.render_widget(Paragraph::new(Line::from(day_spans)).scroll((0, 0)), header_layout[1]);
     frame.render_widget(Paragraph::new(Line::from(weekday_spans)).scroll((0, 0)), header_layout[2]);
@@ -3800,7 +3309,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         InputMode::Normal => "(?) Help | Nav(Tab) | A/a/s(Add) | </>(Ind) | D(el) | (M)ore | (T)odo | (Ctrl-s)ave | (q)uit",
         InputMode::Editing => "Editing... (Enter) save | (Esc) cancel | (Ctrl-w) del word",
     };
-    
+
     let topic_display = if app.focus_area == FocusArea::NtfyTopic && app.input_mode == InputMode::Editing {
         format!("ntfy channel name: > {}", app.input_buffer)
     } else {
@@ -3812,36 +3321,14 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         Style::default()
     };
 
-    let daily_note_display = if app.focus_area == FocusArea::DailyNotePath && app.input_mode == InputMode::Editing {
-        format!("daily note path: > {}", app.input_buffer)
-    } else {
-        format!("daily note path: {}", app.all_projects.daily_note_path.as_deref().unwrap_or("-"))
-    };
-    let daily_note_style = if app.focus_area == FocusArea::DailyNotePath {
-        Style::default().bg(Color::Blue).fg(Color::White)
-    } else {
-        Style::default()
-    };
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-        .split(area);
-
-    let row0 = Layout::default()
+    let row = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(30), Constraint::Percentage(40)])
-        .split(rows[0]);
+        .split(area);
 
-    let row1 = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[1]);
-
-    frame.render_widget(Paragraph::new(app.status_message.clone()).alignment(Alignment::Left), row0[0]);
-    frame.render_widget(Paragraph::new(topic_display).style(topic_style).alignment(Alignment::Left), row0[1]);
-    frame.render_widget(Paragraph::new(help_text).alignment(Alignment::Right).wrap(Wrap { trim: true }), row0[2]);
-    frame.render_widget(Paragraph::new(daily_note_display).style(daily_note_style).alignment(Alignment::Left), row1[0]);
+    frame.render_widget(Paragraph::new(app.status_message.clone()).alignment(Alignment::Left), row[0]);
+    frame.render_widget(Paragraph::new(topic_display).style(topic_style).alignment(Alignment::Left), row[1]);
+    frame.render_widget(Paragraph::new(help_text).alignment(Alignment::Right).wrap(Wrap { trim: true }), row[2]);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -3921,8 +3408,6 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from("  Enter            Edit selected field"),
         Line::from("  > / <            Indent/unindent task"),
         Line::from("  K/J              Move task up/down"),
-        Line::from("  n                Toggle Obsidian note attachment"),
-        Line::from("  o                Open Obsidian note for task"),
         Line::from(""),
         Line::from(Span::styled("TODO LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  T                Toggle todo list panel"),
