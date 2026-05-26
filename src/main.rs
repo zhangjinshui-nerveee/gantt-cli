@@ -391,10 +391,9 @@ impl App {
             tasks: vec![],
             archived: false,
         };
+        self.save_state_for_undo();
         self.all_projects.projects.push(new_project);
         self.current_project_index = self.all_projects.projects.len() - 1;
-        self.history.clear();
-        self.redo_history.clear();
         self.recalculate_schedule();
         self.table_state.select(None); // Deselect any task
         self.focus_area = FocusArea::Project(ProjectField::Name); // Focus on new project name
@@ -408,16 +407,14 @@ impl App {
             return;
         }
 
+        self.save_state_for_undo();
         let removed_project = self.all_projects.projects.remove(self.current_project_index);
         self.deleted_projects.push(removed_project.clone());
-        
+
         // Adjust index
         if self.current_project_index >= self.all_projects.projects.len() {
             self.current_project_index = self.all_projects.projects.len() - 1;
         }
-
-        self.history.clear(); // Clear history for the previous project context
-        self.redo_history.clear();
         self.recalculate_schedule();
         self.status_message = format!("Deleted project '{}'. Press Ctrl+u to restore.", removed_project.project_name);
         self.is_dirty = true;
