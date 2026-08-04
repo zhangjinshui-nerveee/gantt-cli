@@ -1,4 +1,4 @@
-use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, Weekday};
+use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -95,19 +95,6 @@ enum TodoItemInput {
 }
 
 fn default_true() -> bool { true }
-fn default_three() -> u32 { 3 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ScheduledEvent {
-    text: String,
-    date: NaiveDate,
-    #[serde(default)]
-    time: Option<NaiveTime>,
-    #[serde(default = "default_three")]
-    days_before: u32,
-    #[serde(default)]
-    repeat_weekly: bool,
-}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ColumnVisibility {
@@ -148,8 +135,6 @@ struct AllProjectsData {
     compact_timeline: bool,
     #[serde(default)]
     column_visibility: ColumnVisibility,
-    #[serde(default)]
-    scheduled_events: Vec<ScheduledEvent>,
     #[serde(default)]
     show_archived: bool,
 }
@@ -199,15 +184,6 @@ enum HighlightMode {
     Urgent,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum EventField {
-    Name,
-    Date,
-    Time,
-    DaysBefore,
-    RepeatWeekly,
-}
-
 struct App {
     all_projects: AllProjectsData,
     current_project_index: usize,
@@ -237,10 +213,6 @@ struct App {
     todo_subtask_index: Option<usize>,
     column_config_open: bool,
     column_config_selected: usize,
-    scheduled_events_open: bool,
-    scheduled_events_state: ListState,
-    editing_event_field: Option<EventField>,
-    selected_event_field: EventField,
     file_mtime: Option<SystemTime>,
     save_conflict_pending: bool,
 }
@@ -287,7 +259,6 @@ impl App {
                 ntfy_topic: None,
                 compact_timeline: false,
                 column_visibility: ColumnVisibility::default(),
-                scheduled_events: vec![],
                 show_archived: false,
             },
             current_project_index: 0,
@@ -317,10 +288,6 @@ impl App {
             todo_subtask_index: None,
             column_config_open: false,
             column_config_selected: 0,
-            scheduled_events_open: false,
-            scheduled_events_state: ListState::default(),
-            editing_event_field: None,
-            selected_event_field: EventField::Name,
             file_mtime: None,
             save_conflict_pending: false,
         };
@@ -357,7 +324,6 @@ impl App {
         }
 
         app.recalculate_schedule();
-        app.promote_due_events();
         app
     }
 
@@ -842,51 +808,6 @@ impl App {
         } else {
             self.focus_area = FocusArea::Tasks;
             self.todo_subtask_index = None;
-        }
-    }
-
-    fn toggle_scheduled_events(&mut self) {
-        self.scheduled_events_open = !self.scheduled_events_open;
-        if self.scheduled_events_open {
-            if self.scheduled_events_state.selected().is_none() && !self.all_projects.scheduled_events.is_empty() {
-                self.scheduled_events_state.select(Some(0));
-            }
-        } else {
-            self.promote_due_events();
-        }
-    }
-
-    fn promote_due_events(&mut self) {
-        let today = self.today;
-        let mut promoted = 0;
-        let events: Vec<(String, NaiveDate, u32, bool)> = self.all_projects.scheduled_events.iter()
-            .map(|e| (e.text.clone(), e.date, e.days_before, e.repeat_weekly))
-            .collect();
-        for (text, date, days_before, repeat_weekly) in &events {
-            let effective_date = if *repeat_weekly {
-                // Find the next upcoming occurrence of the same weekday
-                let anchor_wd = date.weekday().num_days_from_monday();
-                let today_wd = today.weekday().num_days_from_monday();
-                let days_ahead = (anchor_wd + 7 - today_wd) % 7;
-                today + Duration::days(days_ahead as i64)
-            } else {
-                *date
-            };
-            let remind_date = effective_date - Duration::days(*days_before as i64);
-            if today >= remind_date {
-                if !self.all_projects.todo_list.iter().any(|t| t.text == *text && !t.completed) {
-                    self.all_projects.todo_list.push(TodoItem {
-                        text: text.clone(),
-                        completed: false,
-                        subtasks: vec![],
-                    });
-                    promoted += 1;
-                    self.is_dirty = true;
-                }
-            }
-        }
-        if promoted > 0 {
-            self.status_message = format!("{} scheduled event(s) added to todo list.", promoted);
         }
     }
 
@@ -1450,106 +1371,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    // Handle scheduled events popup
-    if app.scheduled_events_open {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('S') => {
-                app.toggle_scheduled_events();
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                let len = app.all_projects.scheduled_events.len();
-                if len > 0 {
-                    let new_idx = match app.scheduled_events_state.selected() {
-                        Some(i) if i < len - 1 => i + 1,
-                        Some(i) => i,
-                        None => 0,
-                    };
-                    app.scheduled_events_state.select(Some(new_idx));
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if let Some(i) = app.scheduled_events_state.selected() {
-                    if i > 0 {
-                        app.scheduled_events_state.select(Some(i - 1));
-                    }
-                }
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                app.selected_event_field = match app.selected_event_field {
-                    EventField::Date => EventField::Date,
-                    EventField::Time => EventField::Date,
-                    EventField::Name => EventField::Time,
-                    EventField::DaysBefore => EventField::Name,
-                    EventField::RepeatWeekly => EventField::DaysBefore,
-                };
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                app.selected_event_field = match app.selected_event_field {
-                    EventField::Date => EventField::Time,
-                    EventField::Time => EventField::Name,
-                    EventField::Name => EventField::DaysBefore,
-                    EventField::DaysBefore => EventField::RepeatWeekly,
-                    EventField::RepeatWeekly => EventField::RepeatWeekly,
-                };
-            }
-            KeyCode::Char('a') => {
-                let today = app.today;
-                app.all_projects.scheduled_events.push(ScheduledEvent {
-                    text: String::new(),
-                    date: today,
-                    time: None,
-                    days_before: 3,
-                    repeat_weekly: false,
-                });
-                let new_idx = app.all_projects.scheduled_events.len() - 1;
-                app.scheduled_events_state.select(Some(new_idx));
-                app.editing_event_field = Some(EventField::Name);
-                app.input_mode = InputMode::Editing;
-                app.input_buffer.clear();
-                app.is_dirty = true;
-            }
-            KeyCode::Char('-') => {
-                if let Some(idx) = app.scheduled_events_state.selected() {
-                    if idx < app.all_projects.scheduled_events.len() {
-                        let removed = app.all_projects.scheduled_events.remove(idx);
-                        if app.all_projects.scheduled_events.is_empty() {
-                            app.scheduled_events_state.select(None);
-                        } else if idx >= app.all_projects.scheduled_events.len() {
-                            app.scheduled_events_state.select(Some(app.all_projects.scheduled_events.len() - 1));
-                        }
-                        app.is_dirty = true;
-                        app.status_message = format!("Removed event '{}'.", removed.text);
-                    }
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if let Some(idx) = app.scheduled_events_state.selected() {
-                    if idx < app.all_projects.scheduled_events.len() {
-                        let field = app.selected_event_field;
-                        if field == EventField::RepeatWeekly {
-                            app.all_projects.scheduled_events[idx].repeat_weekly =
-                                !app.all_projects.scheduled_events[idx].repeat_weekly;
-                            app.is_dirty = true;
-                        } else {
-                            let event = &app.all_projects.scheduled_events[idx];
-                            app.input_buffer = match field {
-                                EventField::Name => event.text.clone(),
-                                EventField::Date => event.date.format("%m/%d/%y").to_string(),
-                                EventField::Time => event.time.map_or(String::new(), |t| t.format("%H:%M").to_string()),
-                                EventField::DaysBefore => event.days_before.to_string(),
-                                EventField::RepeatWeekly => unreachable!(),
-                            };
-                            app.editing_event_field = Some(field);
-                            app.input_mode = InputMode::Editing;
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        return;
-    }
-
     if key.modifiers == KeyModifiers::CONTROL {
         match key.code {
             KeyCode::Char('s') => {
@@ -1779,7 +1600,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.status_message = "Moved calendar right by 1 day.".to_string();
         }
         KeyCode::Char('T') => app.toggle_todo_list(),
-        KeyCode::Char('S') => app.toggle_scheduled_events(),
         KeyCode::Char('+') => app.add_selected_task_to_todo(),
         KeyCode::Char('-') => {
             if app.focus_area == FocusArea::TodoList {
@@ -1929,51 +1749,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_editing_mode(app: &mut App, key: KeyEvent) {
-
-    // Handle scheduled event field editing (multi-step)
-    if app.scheduled_events_open && app.editing_event_field.is_some() {
-        match key.code {
-            KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
-                let buffer = &mut app.input_buffer;
-                let last_word_start = buffer.trim_end_matches(|c: char| c.is_whitespace())
-                    .rfind(|c: char| c.is_whitespace())
-                    .map_or(0, |i| i + 1);
-                buffer.truncate(last_word_start);
-            }
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT => {
-                app.input_buffer.push(c);
-            }
-            KeyCode::Backspace => { app.input_buffer.pop(); }
-            KeyCode::Enter => {
-                save_event_field(app);
-                if app.editing_event_field.is_none() {
-                    app.input_mode = InputMode::Normal;
-                    app.input_buffer.clear();
-                }
-            }
-            KeyCode::Esc => {
-                // Cancel: remove event if it was newly added (empty name)
-                if let Some(idx) = app.scheduled_events_state.selected() {
-                    if idx < app.all_projects.scheduled_events.len()
-                        && app.all_projects.scheduled_events[idx].text.is_empty()
-                    {
-                        app.all_projects.scheduled_events.remove(idx);
-                        if app.all_projects.scheduled_events.is_empty() {
-                            app.scheduled_events_state.select(None);
-                        } else {
-                            app.scheduled_events_state.select(Some(idx.saturating_sub(1)));
-                        }
-                        app.is_dirty = true;
-                    }
-                }
-                app.editing_event_field = None;
-                app.input_mode = InputMode::Normal;
-                app.input_buffer.clear();
-            }
-            _ => {}
-        }
-        return;
-    }
 
     match key.code {
         KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
@@ -2414,57 +2189,6 @@ fn save_buffer_to_task(app: &mut App) {
     }
 }
 
-fn save_event_field(app: &mut App) {
-    let buf = app.input_buffer.clone();
-    let field = match app.editing_event_field {
-        Some(f) => f,
-        None => return,
-    };
-    let idx = match app.scheduled_events_state.selected() {
-        Some(i) if i < app.all_projects.scheduled_events.len() => i,
-        _ => return,
-    };
-
-    match field {
-        EventField::Name => {
-            app.all_projects.scheduled_events[idx].text = buf;
-        }
-        EventField::Date => {
-            if let Ok(d) = NaiveDate::parse_from_str(&buf, "%m/%d/%y") {
-                app.all_projects.scheduled_events[idx].date = d;
-            } else {
-                app.status_message = "Invalid date. Use mm/dd/yy (e.g. 05/01/26).".to_string();
-            }
-        }
-        EventField::Time => {
-            let s = buf.trim();
-            let parsed = if s.is_empty() {
-                Ok(None)
-            } else {
-                NaiveTime::parse_from_str(s, "%H:%M")
-                    .or_else(|_| NaiveTime::parse_from_str(s, "%H%M"))
-                    .map(Some)
-                    .map_err(|_| ())
-            };
-            match parsed {
-                Ok(t) => app.all_projects.scheduled_events[idx].time = t,
-                Err(_) => app.status_message = "Invalid time. Use HH:MM or HHMM (e.g. 14:30 or 1430).".to_string(),
-            }
-        }
-        EventField::DaysBefore => {
-            if let Ok(n) = buf.trim().parse::<u32>() {
-                app.all_projects.scheduled_events[idx].days_before = n;
-            } else {
-                app.status_message = "Invalid number for days before.".to_string();
-            }
-        }
-        EventField::RepeatWeekly => {} // toggled directly, not via text editing
-    }
-
-    app.editing_event_field = None;
-    app.is_dirty = true;
-}
-
 // --- UI RENDERING ---
 fn calculate_column_widths(app: &App) -> [u16; 8] {
     const PADDING: u16 = 2;
@@ -2548,109 +2272,105 @@ fn ui(frame: &mut Frame, app: &mut App) {
     render_footer(frame, footer_area, app);
 
     if let InputMode::Editing = app.input_mode {
-        if app.editing_event_field.is_some() {
-            // Cursor is shown inside the scheduled events popup; hide it from the main panel
-        } else {
-            match app.focus_area {
-                FocusArea::Project(field) => {
-                    let y_offset = match field {
-                        ProjectField::Name => 1,
-                        ProjectField::StartDate | ProjectField::EndDate => 2,
+        match app.focus_area {
+            FocusArea::Project(field) => {
+                let y_offset = match field {
+                    ProjectField::Name => 1,
+                    ProjectField::StartDate | ProjectField::EndDate => 2,
+                };
+                let x_offset = match field {
+                    ProjectField::Name => "Project: ".len(),
+                    ProjectField::StartDate => "Start Date: ".len(),
+                    ProjectField::EndDate => "Start Date: YYYY/MM/DD | End Date: ".len(),
+                };
+                frame.set_cursor_position(
+                    (table_area.x + 1 + (x_offset + app.input_buffer.len()) as u16,
+                    table_area.y + y_offset),
+                );
+            }
+            FocusArea::Tasks => {
+                if let Some(selected_row_index) = app.table_state.selected() {
+                    let block = Block::default().borders(Borders::ALL);
+                    let inner_area = block.inner(table_area);
+                    let layout = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(1),
+                            Constraint::Length(1),
+                            Constraint::Length(1),
+                            Constraint::Min(0),
+                        ])
+                        .split(inner_area);
+                    let tasks_area = layout[3];
+
+                    let col_constraints: Vec<Constraint> = column_widths.iter().map(|w| Constraint::Length(*w)).collect();
+                    let col_layout = Layout::default().direction(Direction::Horizontal).constraints(col_constraints).split(tasks_area);
+
+                    let selected_col_index = match app.selected_task_field {
+                        TaskField::Name => 1,
+                        TaskField::AssignedTo => 2,
+                        TaskField::StartDate => 3,
+                        TaskField::EndDate => 4,
+                        TaskField::Duration => 5,
+                        TaskField::Progress => 6,
+                        TaskField::Dependencies => 7,
                     };
-                    let x_offset = match field {
-                        ProjectField::Name => "Project: ".len(),
-                        ProjectField::StartDate => "Start Date: ".len(),
-                        ProjectField::EndDate => "Start Date: YYYY/MM/DD | End Date: ".len(),
+                    let selected_col_rect = col_layout[selected_col_index];
+
+                    let indent_len = if app.selected_task_field == TaskField::Name {
+                        let task = &app.get_current_project().tasks[selected_row_index];
+                        let level = app.get_task_level(task);
+                        (level * 2) as u16 // 2 spaces per level
+                    } else {
+                        0
                     };
-                    frame.set_cursor_position(
-                        (table_area.x + 1 + (x_offset + app.input_buffer.len()) as u16,
-                        table_area.y + y_offset),
-                    );
+
+                    // The content being rendered in an active cell is `> ` + indent + buffer
+                    let prefix_len = "> ".len() as u16;
+
+                    // spacing_offset must stay consistent with pre-End-Date indices;
+                    // End Date (display-only, col 4) shifts the index of later fields
+                    // by 1 but should not affect the spacing calculation.
+                    let spacing_offset = match app.selected_task_field {
+                        TaskField::Name => 1u16,
+                        TaskField::AssignedTo => 2,
+                        TaskField::StartDate => 3,
+                        TaskField::EndDate => 4,
+                        TaskField::Duration => 5,
+                        TaskField::Progress => 6,
+                        TaskField::Dependencies => 7,
+                    };
+
+                    // Per-column adjustment based on user feedback:
+                    // Name (idx 1): 0
+                    // AssignedTo (idx 2): 6
+                    // StartDate through Dependencies (idx 3+): 7
+                    let adjustment_offset = match app.selected_task_field {
+                        TaskField::Name => 0,
+                        TaskField::AssignedTo => 6,
+                        _ => 7,
+                    };
+
+                    let cursor_x = (selected_col_rect.x
+                                 + spacing_offset
+                                 + prefix_len
+                                 + indent_len
+                                 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16)
+                                 .saturating_sub(adjustment_offset);
+
+                    let cursor_y = tasks_area.y + (selected_row_index - app.table_state.offset()) as u16;
+                    frame.set_cursor_position((cursor_x, cursor_y));
                 }
-                FocusArea::Tasks => {
-                    if let Some(selected_row_index) = app.table_state.selected() {
-                        let block = Block::default().borders(Borders::ALL);
-                        let inner_area = block.inner(table_area);
-                        let layout = Layout::default()
-                            .direction(Direction::Vertical)
-                            .constraints([
-                                Constraint::Length(1),
-                                Constraint::Length(1),
-                                Constraint::Length(1),
-                                Constraint::Min(0),
-                            ])
-                            .split(inner_area);
-                        let tasks_area = layout[3];
-
-                        let col_constraints: Vec<Constraint> = column_widths.iter().map(|w| Constraint::Length(*w)).collect();
-                        let col_layout = Layout::default().direction(Direction::Horizontal).constraints(col_constraints).split(tasks_area);
-
-                        let selected_col_index = match app.selected_task_field {
-                            TaskField::Name => 1,
-                            TaskField::AssignedTo => 2,
-                            TaskField::StartDate => 3,
-                            TaskField::EndDate => 4,
-                            TaskField::Duration => 5,
-                            TaskField::Progress => 6,
-                            TaskField::Dependencies => 7,
-                        };
-                        let selected_col_rect = col_layout[selected_col_index];
-
-                        let indent_len = if app.selected_task_field == TaskField::Name {
-                            let task = &app.get_current_project().tasks[selected_row_index];
-                            let level = app.get_task_level(task);
-                            (level * 2) as u16 // 2 spaces per level
-                        } else {
-                            0
-                        };
-
-                        // The content being rendered in an active cell is `> ` + indent + buffer
-                        let prefix_len = "> ".len() as u16;
-                        
-                        // spacing_offset must stay consistent with pre-End-Date indices;
-                        // End Date (display-only, col 4) shifts the index of later fields
-                        // by 1 but should not affect the spacing calculation.
-                        let spacing_offset = match app.selected_task_field {
-                            TaskField::Name => 1u16,
-                            TaskField::AssignedTo => 2,
-                            TaskField::StartDate => 3,
-                            TaskField::EndDate => 4,
-                            TaskField::Duration => 5,
-                            TaskField::Progress => 6,
-                            TaskField::Dependencies => 7,
-                        };
-
-                        // Per-column adjustment based on user feedback:
-                        // Name (idx 1): 0
-                        // AssignedTo (idx 2): 6
-                        // StartDate through Dependencies (idx 3+): 7
-                        let adjustment_offset = match app.selected_task_field {
-                            TaskField::Name => 0,
-                            TaskField::AssignedTo => 6,
-                            _ => 7,
-                        };
-
-                        let cursor_x = (selected_col_rect.x
-                                     + spacing_offset
-                                     + prefix_len
-                                     + indent_len
-                                     + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16)
-                                     .saturating_sub(adjustment_offset);
-
-                        let cursor_y = tasks_area.y + (selected_row_index - app.table_state.offset()) as u16;
-                        frame.set_cursor_position((cursor_x, cursor_y));
-                    }
-                }
-                FocusArea::TodoList => {}
-                FocusArea::NtfyTopic => {
-                    let row = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(30), Constraint::Percentage(30), Constraint::Percentage(40)])
-                        .split(footer_area);
-                    let topic_area = row[1];
-                    let cursor_x = topic_area.x + "ntfy channel name: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
-                    frame.set_cursor_position((cursor_x, topic_area.y));
-                }
+            }
+            FocusArea::TodoList => {}
+            FocusArea::NtfyTopic => {
+                let row = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(30), Constraint::Percentage(30), Constraint::Percentage(40)])
+                    .split(footer_area);
+                let topic_area = row[1];
+                let cursor_x = topic_area.x + "ntfy channel name: > ".len() as u16 + UnicodeWidthStr::width(app.input_buffer.as_str()) as u16;
+                frame.set_cursor_position((cursor_x, topic_area.y));
             }
         }
     }
@@ -2658,11 +2378,6 @@ fn ui(frame: &mut Frame, app: &mut App) {
     // Render todo list popup overlay
     if app.todo_list_open {
         render_todo_list(frame, app);
-    }
-
-    // Render scheduled events popup overlay
-    if app.scheduled_events_open {
-        render_scheduled_events(frame, app);
     }
 
     // Render column config popup overlay
@@ -2754,159 +2469,6 @@ fn render_todo_list(frame: &mut Frame, app: &mut App) {
         .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, area, &mut app.todo_list_state);
-}
-
-fn render_scheduled_events(frame: &mut Frame, app: &mut App) {
-    let area = centered_rect(65, 70, frame.area());
-    frame.render_widget(Clear, area);
-
-    let today = app.today;
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("Scheduled Events (a: Add, Enter: Edit, -: Delete, S/Esc: Close)")
-        .border_style(Style::default().fg(Color::Magenta));
-
-    let items: Vec<ListItem> = app.all_projects.scheduled_events.iter().enumerate().map(|(i, event)| {
-        let remind_date = event.date - Duration::days(event.days_before as i64);
-        let is_past = event.date < today;
-        let is_due = today >= remind_date && !is_past;
-
-        let is_editing = app.editing_event_field.is_some()
-            && app.scheduled_events_state.selected() == Some(i);
-
-        let date_str = event.date.format("%m/%d/%y").to_string();
-        let time_str = event.time.map_or("--:--".to_string(), |t| t.format("%H:%M").to_string());
-
-        let day_str = event.date.format("%a").to_string(); // Mon, Tue, etc.
-        let weekly_str = if event.repeat_weekly { "Yes" } else { "No" };
-
-        let (name_display, date_display, time_display, days_display) = if is_editing {
-            match app.editing_event_field {
-                Some(EventField::Name) => (
-                    format!("{}_", app.input_buffer),
-                    date_str,
-                    time_str,
-                    event.days_before.to_string(),
-                ),
-                Some(EventField::Date) => (
-                    event.text.clone(),
-                    format!("{}_", app.input_buffer),
-                    time_str,
-                    event.days_before.to_string(),
-                ),
-                Some(EventField::Time) => (
-                    event.text.clone(),
-                    date_str,
-                    format!("{}_", app.input_buffer),
-                    event.days_before.to_string(),
-                ),
-                Some(EventField::DaysBefore) => (
-                    event.text.clone(),
-                    date_str,
-                    time_str,
-                    format!("{}_", app.input_buffer),
-                ),
-                _ => (event.text.clone(), date_str, time_str, event.days_before.to_string()),
-            }
-        } else {
-            (event.text.clone(), date_str, time_str, event.days_before.to_string())
-        };
-
-        let base_style = if is_past {
-            Style::default().fg(Color::DarkGray)
-        } else if is_due {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let edit_style = Style::default().fg(Color::Cyan);
-
-        let is_selected = app.scheduled_events_state.selected() == Some(i);
-        let col_sel = Style::default().bg(Color::Blue);
-
-        let cell_style = |field: EventField| -> Style {
-            if is_editing && app.editing_event_field == Some(field) {
-                edit_style
-            } else if is_selected && app.selected_event_field == field {
-                col_sel
-            } else {
-                base_style
-            }
-        };
-
-        let weekly_style = if is_selected && app.selected_event_field == EventField::RepeatWeekly {
-            col_sel
-        } else if event.repeat_weekly {
-            Style::default().fg(Color::Green)
-        } else {
-            Style::default().fg(Color::Indexed(240))
-        };
-
-        let line = Line::from(vec![
-            Span::styled(format!("{:<10}", date_display), cell_style(EventField::Date)),
-            Span::styled(" ", Style::default()),
-            Span::styled(format!("{:<3}", day_str), base_style),
-            Span::styled(" ", Style::default()),
-            Span::styled(format!("{:<5}", time_display), cell_style(EventField::Time)),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:<30}", name_display), cell_style(EventField::Name)),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{:<6}", days_display),
-                if is_editing && app.editing_event_field == Some(EventField::DaysBefore) {
-                    edit_style
-                } else if is_selected && app.selected_event_field == EventField::DaysBefore {
-                    col_sel
-                } else {
-                    Style::default().fg(Color::Indexed(247))
-                },
-            ),
-            Span::styled("d │ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:<3}", weekly_str), weekly_style),
-        ]);
-
-        ListItem::new(line)
-    }).collect();
-
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner_area);
-
-    let hdr = |label: &str, field: EventField, width: usize| -> Span {
-        let s = if app.selected_event_field == field {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-        } else {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        };
-        Span::styled(format!("{:<width$}", label, width = width), s)
-    };
-
-    let header_line = Line::from(vec![
-        Span::styled("  ", Style::default()),  // highlight_symbol placeholder
-        hdr("Date", EventField::Date, 10),
-        Span::styled(" ", Style::default()),
-        Span::styled(format!("{:<3}", "Day"), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::styled(" ", Style::default()),
-        hdr("Time", EventField::Time, 5),
-        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-        hdr("Name", EventField::Name, 30),
-        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-        hdr("Remind", EventField::DaysBefore, 6),
-        Span::styled("d │ ", Style::default().fg(Color::DarkGray)),
-        hdr("Weekly", EventField::RepeatWeekly, 3),
-    ]);
-    frame.render_widget(Paragraph::new(header_line), layout[0]);
-
-    let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::DarkGray))
-        .highlight_symbol("> ");
-
-    frame.render_stateful_widget(list, layout[1], &mut app.scheduled_events_state);
 }
 
 fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths: &[u16; 8]) {
@@ -3073,7 +2635,7 @@ fn render_task_table(frame: &mut Frame, area: Rect, app: &mut App, column_widths
         ];
 
         let mut other_cells: Vec<Cell> = cells_data.iter().map(|(field, data)| {
-            let is_active_cell = is_selected_row && app.focus_area == FocusArea::Tasks && app.selected_task_field == *field && app.editing_event_field.is_none();
+            let is_active_cell = is_selected_row && app.focus_area == FocusArea::Tasks && app.selected_task_field == *field;
             let style = if is_active_cell {
                 match app.input_mode {
                     InputMode::Editing => Style::default().fg(Color::White).bg(Color::Magenta),
@@ -3415,7 +2977,8 @@ fn render_help_screen(frame: &mut Frame) {
         Line::from(""),
         Line::from(Span::styled("TODO LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  T                Toggle todo list panel"),
-        Line::from("  S                Scheduled events popup"),
+        Line::from("  a                Add todo item (or subtask, inside one)"),
+        Line::from("  i                Add subtask to selected item"),
         Line::from("  + / -            Add/remove task from todo"),
         Line::from("  Space            Toggle todo complete"),
         Line::from("  Shift+C          Clear completed todos"),
